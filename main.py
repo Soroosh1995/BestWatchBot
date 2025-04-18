@@ -56,54 +56,64 @@ async def translate_plot(plot):
         logger.error(f"خطا در ترجمه خلاصه داستان: {e}")
         return plot
 
-async def get_movie_info(title):
-    """دریافت اطلاعات فیلم از OMDB و TMDB"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            # OMDB
-            omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            logger.info(f"فچ اطلاعات فیلم {title} از OMDB")
-            async with session.get(omdb_url, timeout=15) as response:
-                omdb_data = await response.json()
-                if omdb_data.get('Response') != 'True':
-                    logger.error(f"فیلم {title} در OMDB پیدا نشد")
-                    return None
+async def get_movie_info(title, max_attempts=3):
+    """دریافت اطلاعات فیلم از OMDB و TMDB با جستجوی فازی"""
+    for attempt in range(max_attempts):
+        try:
+            async with aiohttp.ClientSession() as session:
+                # جستجوی فازی در OMDB
+                omdb_url = f"http://www.omdbapi.com/?s={title}&apikey={OMDB_API_KEY}"
+                logger.info(f"جستجوی فازی فیلم {title} در OMDB (تلاش {attempt+1})")
+                async with session.get(omdb_url, timeout=15) as response:
+                    omdb_data = await response.json()
+                    if omdb_data.get('Response') != 'True' or not omdb_data.get('Search'):
+                        logger.error(f"هیچ نتیجه‌ای برای {title} در OMDB پیدا نشد")
+                        return None
 
-                # TMDB برای تریلر
-                search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
-                async with session.get(search_url, timeout=15) as tmdb_response:
-                    tmdb_data = await tmdb_response.json()
-                    trailer = "N/A"
-                    if tmdb_data.get('results'):
-                        movie_id = tmdb_data['results'][0]['id']
-                        videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                        async with session.get(videos_url, timeout=15) as videos_response:
-                            videos_data = await videos_response.json()
-                            if videos_data.get('results'):
-                                for video in videos_data['results']:
-                                    if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                        trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                        break
+                    # گرفتن اولین نتیجه
+                    movie_id = omdb_data['Search'][0]['imdbID']
+                    omdb_detail_url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}"
+                    async with session.get(omdb_detail_url, timeout=15) as detail_response:
+                        omdb_data = await detail_response.json()
+                        if omdb_data.get('Response') != 'True':
+                            logger.error(f"جزئیات فیلم {title} در OMDB پیدا نشد")
+                            return None
 
-                # ترجمه خلاصه داستان
-                plot = omdb_data.get('Plot', 'No plot available')
-                translated_plot = await translate_plot(plot)
+                        # TMDB برای تریلر
+                        search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
+                        async with session.get(search_url, timeout=15) as tmdb_response:
+                            tmdb_data = await tmdb_response.json()
+                            trailer = "N/A"
+                            if tmdb_data.get('results'):
+                                movie_id = tmdb_data['results'][0]['id']
+                                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
+                                async with session.get(videos_url, timeout=15) as videos_response:
+                                    videos_data = await videos_response.json()
+                                    if videos_data.get('results'):
+                                        for video in videos_data['results']:
+                                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                                break
 
-                rotten_tomatoes = next(
-                    (r['Value'] for r in omdb_data.get('Ratings', []) if r['Source'] == 'Rotten Tomatoes'),
-                    str(random.randint(70, 95)) + '%'
-                )
-                return {
-                    'title': omdb_data.get('Title', title),
-                    'year': omdb_data.get('Year', 'N/A'),
-                    'plot': translated_plot,
-                    'imdb': omdb_data.get('imdbRating', 'N/A'),
-                    'rotten_tomatoes': rotten_tomatoes,
-                    'trailer': trailer,
-                    'poster': omdb_data.get('Poster', 'N/A')
-                }
-    except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات فیلم {title}: {e}")
+                        # ترجمه خلاصه داستان
+                        plot = omdb_data.get('Plot', 'No plot available')
+                        translated_plot = await translate_plot(plot)
+
+                        rotten_tomatoes = next(
+                            (r['Value'] for r in omdb_data.get('Ratings', []) if r['Source'] == 'Rotten Tomatoes'),
+                            str(random.randint(70, 95)) + '%'
+                        )
+                        return {
+                            'title': omdb_data.get('Title', title),
+                            'year': omdb_data.get('Year', 'N/A'),
+                            'plot': translated_plot,
+                            'imdb': omdb_data.get('imdbRating', 'N/A'),
+                            'rotten_tomatoes': rotten_tomatoes,
+                            'trailer': trailer,
+                            'poster': omdb_data.get('Poster', 'N/A')
+                        }
+        except Exception as e:
+            logger.error(f"خطا در دریافت اطلاعات فیلم {title} (تلاش {attempt+1}): {e}")
         return None
 
 async def generate_comment(title):
@@ -131,50 +141,58 @@ async def generate_comment(title):
         return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
 
 async def fetch_movies_to_cache():
-    """آپدیت کش فیلم‌ها از TMDB"""
+    """آپدیت کش فیلم‌ها از TMDB (5 صفحه، 100 فیلم)"""
     global cached_movies, last_fetch_time
     try:
         async with aiohttp.ClientSession() as session:
-            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
-            logger.info(f"فچ لیست فیلم‌ها از TMDB")
-            async with session.get(url, timeout=15) as response:
-                data = await response.json()
-                if 'results' in data and data['results']:
-                    cached_movies = data['results']
-                    last_fetch_time = datetime.now()
-                    logger.info(f"کش آپدیت شد. تعداد فیلم‌ها: {len(cached_movies)}")
-                    return True
-                logger.error("خطا در دریافت لیست از TMDB")
-                return False
+            cached_movies = []
+            for page in range(1, 6):
+                url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
+                logger.info(f"فچ لیست فیلم‌ها از TMDB (صفحه {page})")
+                async with session.get(url, timeout=15) as response:
+                    data = await response.json()
+                    if 'results' in data and data['results']:
+                        cached_movies.extend(data['results'])
+                    else:
+                        logger.error(f"خطا در دریافت صفحه {page} از TMDB")
+            if cached_movies:
+                last_fetch_time = datetime.now()
+                logger.info(f"کش آپدیت شد. تعداد فیلم‌ها: {len(cached_movies)}")
+                return True
+            logger.error("هیچ فیلمی از TMDB دریافت نشد")
+            return False
     except Exception as e:
         logger.error(f"خطا در آپدیت کش: {e}")
         return False
 
-async def get_random_movie():
-    """انتخاب فیلم رندوم از کش"""
-    try:
-        if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
-            await fetch_movies_to_cache()
-        if not cached_movies:
-            logger.error("کش خالی است")
-            return None
-        movie = random.choice(cached_movies)
-        movie_info = await get_movie_info(movie['title'])
-        if not movie_info:
-            logger.error(f"اطلاعات فیلم {movie['title']} پیدا نشد")
-            return None
-        comment = await generate_comment(movie['title'])
-        imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
-        rating = min(5, max(1, int(imdb_score // 2)))
-        return {
-            **movie_info,
-            'comment': comment,
-            'rating': rating,
-            'special': imdb_score >= 8.0
-        }
-    except Exception as e:
-        logger.error(f"خطا در انتخاب فیلم: {e}")
-        return None
+async def get_random_movie(max_attempts=3):
+    """انتخاب فیلم رندوم از کش با چند تلاش"""
+    for attempt in range(max_attempts):
+        try:
+            if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
+                await fetch_movies_to_cache()
+            if not cached_movies:
+                logger.error("کش خالی است")
+                return None
+            movie = random.choice(cached_movies)
+            logger.info(f"فیلم انتخاب‌شده: {movie['title']} (تلاش {attempt+1})")
+            movie_info = await get_movie_info(movie['title'])
+            if not movie_info:
+                logger.error(f"اطلاعات فیلم {movie['title']} پیدا نشد")
+                continue
+            comment = await generate_comment(movie['title'])
+            imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
+            rating = min(5, max(1, int(imdb_score // 2)))
+            return {
+                **movie_info,
+                'comment': comment,
+                'rating': rating,
+                'special': imdb_score >= 8.0
+            }
+        except Exception as e:
+            logger.error(f"خطا در انتخاب فیلم (تلاش {attempt+1}): {e}")
+    logger.error("هیچ فیلمی پس از چند تلاش پیدا نشد")
+    return None
 
 def format_movie_post(movie):
     """فرمت پست فیلم"""
@@ -197,7 +215,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     message = (
         "🎬 به بات Best Watch خوش اومدی!\n\n"
-        "این بات برای مدیریت کانال @bestwatch_channelه.\n"
         "دستورات موجود:\n"
         "/start - نمایش این پیام\n"
         "/fetchmovies - آپدیت لیست فیلم‌ها\n"
@@ -264,7 +281,7 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("در حال آماده‌سازی پست...")
     movie = await get_random_movie()
     if not movie:
-        await msg.edit_text("❌ خطا در یافتن فیلم")
+        await msg.edit_text("❌ هیچ فیلمی پیدا نشد. لطفاً دوباره امتحان کنید یا لیست را آپدیت کنید (/fetchmovies).")
         return
     post = format_movie_post(movie)
     try:
