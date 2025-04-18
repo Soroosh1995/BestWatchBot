@@ -20,7 +20,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
-OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
@@ -56,64 +55,46 @@ async def translate_plot(plot):
         logger.error(f"خطا در ترجمه خلاصه داستان: {e}")
         return plot
 
-async def get_movie_info(title, max_attempts=3):
-    """دریافت اطلاعات فیلم از OMDB و TMDB با جستجوی فازی"""
-    for attempt in range(max_attempts):
-        try:
-            async with aiohttp.ClientSession() as session:
-                # جستجوی فازی در OMDB
-                omdb_url = f"http://www.omdbapi.com/?s={title}&apikey={OMDB_API_KEY}"
-                logger.info(f"جستجوی فازی فیلم {title} در OMDB (تلاش {attempt+1})")
-                async with session.get(omdb_url, timeout=15) as response:
-                    omdb_data = await response.json()
-                    if omdb_data.get('Response') != 'True' or not omdb_data.get('Search'):
-                        logger.error(f"هیچ نتیجه‌ای برای {title} در OMDB پیدا نشد")
-                        return None
+async def get_movie_info(movie):
+    """دریافت اطلاعات فیلم از TMDB"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            movie_id = movie['id']
+            # جزئیات فیلم
+            details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
+            logger.info(f"فچ اطلاعات فیلم {movie['title']} از TMDB")
+            async with session.get(details_url, timeout=15) as response:
+                details = await response.json()
+                if not details.get('id'):
+                    logger.error(f"جزئیات فیلم {movie['title']} پیدا نشد")
+                    return None
 
-                    # گرفتن اولین نتیجه
-                    movie_id = omdb_data['Search'][0]['imdbID']
-                    omdb_detail_url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}"
-                    async with session.get(omdb_detail_url, timeout=15) as detail_response:
-                        omdb_data = await detail_response.json()
-                        if omdb_data.get('Response') != 'True':
-                            logger.error(f"جزئیات فیلم {title} در OMDB پیدا نشد")
-                            return None
+                # تریلر
+                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
+                trailer = "N/A"
+                async with session.get(videos_url, timeout=15) as videos_response:
+                    videos_data = await videos_response.json()
+                    if videos_data.get('results'):
+                        for video in videos_data['results']:
+                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                break
 
-                        # TMDB برای تریلر
-                        search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
-                        async with session.get(search_url, timeout=15) as tmdb_response:
-                            tmdb_data = await tmdb_response.json()
-                            trailer = "N/A"
-                            if tmdb_data.get('results'):
-                                movie_id = tmdb_data['results'][0]['id']
-                                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                                async with session.get(videos_url, timeout=15) as videos_response:
-                                    videos_data = await videos_response.json()
-                                    if videos_data.get('results'):
-                                        for video in videos_data['results']:
-                                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                                break
+                # ترجمه خلاصه داستان
+                plot = details.get('overview', 'No plot available')
+                translated_plot = await translate_plot(plot)
 
-                        # ترجمه خلاصه داستان
-                        plot = omdb_data.get('Plot', 'No plot available')
-                        translated_plot = await translate_plot(plot)
-
-                        rotten_tomatoes = next(
-                            (r['Value'] for r in omdb_data.get('Ratings', []) if r['Source'] == 'Rotten Tomatoes'),
-                            str(random.randint(70, 95)) + '%'
-                        )
-                        return {
-                            'title': omdb_data.get('Title', title),
-                            'year': omdb_data.get('Year', 'N/A'),
-                            'plot': translated_plot,
-                            'imdb': omdb_data.get('imdbRating', 'N/A'),
-                            'rotten_tomatoes': rotten_tomatoes,
-                            'trailer': trailer,
-                            'poster': omdb_data.get('Poster', 'N/A')
-                        }
-        except Exception as e:
-            logger.error(f"خطا در دریافت اطلاعات فیلم {title} (تلاش {attempt+1}): {e}")
+                return {
+                    'title': details.get('title', movie['title']),
+                    'year': details.get('release_date', 'N/A')[:4],
+                    'plot': translated_plot,
+                    'imdb': str(round(details.get('vote_average', 0), 1)),  # امتیاز TMDB به فرمت 0-10
+                    'rotten_tomatoes': str(random.randint(70, 95)) + '%',
+                    'trailer': trailer,
+                    'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path', '')}" if details.get('poster_path') else 'N/A'
+                }
+    except Exception as e:
+        logger.error(f"خطا در دریافت اطلاعات فیلم {movie['title']}: {e}")
         return None
 
 async def generate_comment(title):
@@ -166,7 +147,7 @@ async def fetch_movies_to_cache():
         return False
 
 async def get_random_movie(max_attempts=3):
-    """انتخاب فیلم رندوم از کش با چند تلاش"""
+    """انتخاب فیلم رندوم از کش"""
     for attempt in range(max_attempts):
         try:
             if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
@@ -176,7 +157,7 @@ async def get_random_movie(max_attempts=3):
                 return None
             movie = random.choice(cached_movies)
             logger.info(f"فیلم انتخاب‌شده: {movie['title']} (تلاش {attempt+1})")
-            movie_info = await get_movie_info(movie['title'])
+            movie_info = await get_movie_info(movie)
             if not movie_info:
                 logger.error(f"اطلاعات فیلم {movie['title']} پیدا نشد")
                 continue
@@ -246,30 +227,39 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = args[1].replace('عنوان: ', '')
         trailer = args[2].replace('تریلر: ', '')
         rotten = args[3].replace('Rotten: ', '')
-        movie_info = await get_movie_info(title)
-        if not movie_info:
-            await update.message.reply_text(f"فیلم {title} پیدا نشد!")
-            return
-        movie_info['trailer'] = trailer
-        movie_info['rotten_tomatoes'] = rotten
-        comment = await generate_comment(title)
-        imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
-        rating = min(5, max(1, int(imdb_score // 2)))
-        movie = {
-            **movie_info,
-            'comment': comment,
-            'rating': rating,
-            'special': imdb_score >= 8.0
-        }
-        post = format_movie_post(movie)
-        try:
-            if movie['poster'] != 'N/A':
-                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post)
-            else:
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=post)
-            await update.message.reply_text(f"فیلم {movie['title']} اضافه و پست شد!")
-        except Exception as e:
-            await update.message.reply_text(f"خطا در ارسال: {str(e)}")
+        # برای addmovie از TMDB جستجو می‌کنیم
+        async with aiohttp.ClientSession() as session:
+            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
+            async with session.get(search_url, timeout=15) as response:
+                tmdb_data = await response.json()
+                if not tmdb_data.get('results'):
+                    await update.message.reply_text(f"فیلم {title} پیدا نشد!")
+                    return
+                movie = tmdb_data['results'][0]
+                movie_info = await get_movie_info(movie)
+                if not movie_info:
+                    await update.message.reply_text(f"فیلم {title} پیدا نشد!")
+                    return
+                movie_info['trailer'] = trailer
+                movie_info['rotten_tomatoes'] = rotten
+                comment = await generate_comment(title)
+                imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
+                rating = min(5, max(1, int(imdb_score // 2)))
+                movie_data = {
+                    **movie_info,
+                    'comment': comment,
+                    'rating': rating,
+                    'special': imdb_score >= 8.0
+                }
+                post = format_movie_post(movie_data)
+                try:
+                    if movie_data['poster'] != 'N/A':
+                        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie_data['poster'], caption=post)
+                    else:
+                        await context.bot.send_message(chat_id=CHANNEL_ID, text=post)
+                    await update.message.reply_text(f"فیلم {movie_data['title']} اضافه و پست شد!")
+                except Exception as e:
+                    await update.message.reply_text(f"خطا در ارسال: {str(e)}")
     except Exception as e:
         await update.message.reply_text(f"خطا: {str(e)}")
 
