@@ -36,41 +36,49 @@ def is_movie_duplicate(title, movies):
     return any(movie['title'].lower() == title.lower() for movie in movies)
 
 async def get_movie_info(title):
-    async with aiohttp.ClientSession() as session:
-        url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-        async with session.get(url) as response:
-            data = await response.json()
-            if data['Response'] == 'True':
-                return {
-                    'title': data['Title'],
-                    'year': data['Year'],
-                    'plot': data['Plot'],
-                    'imdb': data['imdbRating'],
-                    'poster': data.get('Poster', 'N/A')
-                }
-            return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+            async with session.get(url, timeout=10) as response:
+                data = await response.json()
+                if data['Response'] == 'True':
+                    return {
+                        'title': data['Title'],
+                        'year': data['Year'],
+                        'plot': data['Plot'],
+                        'imdb': data['imdbRating'],
+                        'poster': data.get('Poster', 'N/A')
+                    }
+                return None
+    except Exception as e:
+        logger.error(f"خطا تو OMDB API: {e}")
+        return None
 
 async def generate_comment(title):
-    async with aiohttp.ClientSession() as session:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "gpt-3.5-turbo",
-            "messages": [
-                {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز. از علامت‌های Markdown مثل * یا _ استفاده نکن."},
-                {"role": "user", "content": f"فیلم: {title}"}
-            ]
-        }
-        async with session.post(url, json=payload, headers=headers) as response:
-            data = await response.json()
-            return data['choices'][0]['message']['content']
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز. از علامت‌های Markdown مثل * یا _ استفاده نکن."},
+                    {"role": "user", "content": f"فیلم: {title}"}
+                ]
+            }
+            async with session.post(url, json=payload, headers=headers, timeout=10) as response:
+                data = await response.json()
+                return data['choices'][0]['message']['content']
+    except Exception as e:
+        logger.error(f"خطا تو OpenAI API: {e}")
+        return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
 
 def clean_text(text):
     text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
-    return text[:1000]  # محدود کردن طول متن
+    return text[:1000]
 
 def format_movie_post(movie):
     rating_stars = {5: '⭐️⭐️⭐️⭐️⭐️', 4: '⭐️⭐️⭐️⭐️', 3: '⭐️⭐️⭐️', 2: '⭐️⭐️', 1: '⭐️'}
