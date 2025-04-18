@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 from datetime import datetime
+from aiohttp import web
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -22,10 +23,15 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
+PORT = int(os.getenv('PORT', 8080))  # پورت اجباری برای Render
 
 # --- کش فیلم‌ها ---
 cached_movies = []
 last_fetch_time = None
+
+async def health_check(request):
+    """Endpoint سلامت برای Render"""
+    return web.Response(text="OK")
 
 async def fetch_movies():
     """دریافت فیلم‌های پرطرفدار از TMDB"""
@@ -158,10 +164,26 @@ async def fetch_movies_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.edit_text("❌ خطا در بروزرسانی لیست")
 
+async def init_web_server():
+    """راه‌اندازی سرور وب برای Render"""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
+    await site.start()
+    logger.info(f"سرور وب روی پورت {PORT} شروع شد")
+    return runner
+
 async def main():
     """تابع اصلی"""
-    await fetch_movies()  # بارگذاری اولیه
+    # بارگذاری اولیه فیلم‌ها
+    await fetch_movies()
     
+    # راه‌اندازی سرور وب
+    web_runner = await init_web_server()
+    
+    # ساخت ربات تلگرام
     app = Application.builder().token(TOKEN).build()
     
     # ثبت دستورات
@@ -175,7 +197,13 @@ async def main():
     logger.info("🤖 ربات فعال شد!")
     
     # اجرای نامحدود
-    await asyncio.Event().wait()
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        await app.stop()
+        await web_runner.cleanup()
+        logger.info("ربات متوقف شد")
 
 if __name__ == '__main__':
     try:
