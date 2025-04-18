@@ -7,6 +7,7 @@ import aiohttp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
+import re
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ async def generate_comment(title):
         payload = {
             "model": "gpt-3.5-turbo",
             "messages": [
-                {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز."},
+                {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز. از علامت‌های Markdown مثل * یا _ استفاده نکن."},
                 {"role": "user", "content": f"فیلم: {title}"}
             ]
         }
@@ -67,17 +68,21 @@ async def generate_comment(title):
             data = await response.json()
             return data['choices'][0]['message']['content']
 
+def clean_text(text):
+    text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
+    return text[:1000]  # محدود کردن طول متن
+
 def format_movie_post(movie):
     rating_stars = {5: '⭐️⭐️⭐️⭐️⭐️', 4: '⭐️⭐️⭐️⭐️', 3: '⭐️⭐️⭐️', 2: '⭐️⭐️', 1: '⭐️'}
     special_symbol = ' 👑' if movie.get('special', False) else ''
     post = (
-        f"🎬 عنوان فیلم: \n{movie['title']}{special_symbol}\n\n"
-        f"📅 سال تولید: {movie['year']}\n\n"
-        f"📝 خلاصه داستان: \n{movie['plot']}\n\n"
-        f"🌟 امتیاز:\nIMDB: {movie['imdb']}\nRotten Tomatoes: {movie['rotten_tomatoes']}%\n\n"
-        f"🎞 لینک تریلر: \n{movie['trailer']}\n\n"
-        f"🍿 حرف ما:\n{movie['comment']}\n\n"
-        f"🎯 ارزش دیدن: {rating_stars[movie['rating']]}\n\n"
+        f"<b>🎬 عنوان فیلم:</b> \n{movie['title']}{special_symbol}\n\n"
+        f"<b>📅 سال تولید:</b> {movie['year']}\n\n"
+        f"<b>📝 خلاصه داستان:</b> \n{clean_text(movie['plot'])}\n\n"
+        f"<b>🌟 امتیاز:</b>\nIMDB: {movie['imdb']}\nRotten Tomatoes: {movie['rotten_tomatoes']}%\n\n"
+        f"<b>🎞 لینک تریلر:</b> \n{movie['trailer']}\n\n"
+        f"<b>🍿 حرف ما:</b>\n{clean_text(movie['comment'])}\n\n"
+        f"<b>🎯 ارزش دیدن:</b> {rating_stars[movie['rating']]}\n\n"
         f"https://t.me/bestwatch_channel"
     )
     return post
@@ -138,11 +143,14 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movie = movies.pop(0)
     save_movies(movies)
     post = format_movie_post(movie)
-    if movie['poster'] != 'N/A':
-        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='Markdown')
-    else:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
-    await update.message.reply_text(f"پست فیلم {movie['title']} ارسال شد!")
+    try:
+        if movie['poster'] != 'N/A':
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='HTML')
+        else:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='HTML')
+        await update.message.reply_text(f"پست فیلم {movie['title']} ارسال شد!")
+    except Exception as e:
+        await update.message.reply_text(f"خطا تو ارسال: {str(e)}")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     movies = load_movies()
@@ -152,11 +160,14 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     movie = movies.pop(0)
     save_movies(movies)
     post = format_movie_post(movie)
-    if movie['poster'] != 'N/A':
-        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='Markdown')
-    else:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
-    logger.info(f"پست فیلم {movie['title']} ارسال شد.")
+    try:
+        if movie['poster'] != 'N/A':
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='HTML')
+        else:
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='HTML')
+        logger.info(f"پست فیلم {movie['title']} ارسال شد.")
+    except Exception as e:
+        logger.error(f"خطا تو ارسال خودکار: {str(e)}")
 
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -170,7 +181,7 @@ async def main():
                 await asyncio.sleep(600)  # هر 10 دقیقه
             except Exception as e:
                 logger.error(f"خطا تو زمان‌بندی: {e}")
-                await asyncio.sleep(60)  # یه دقیقه صبر قبل از تلاش دوباره
+                await asyncio.sleep(60)
     app.create_task(schedule_posts())
     await app.initialize()
     await app.start()
