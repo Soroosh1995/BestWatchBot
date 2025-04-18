@@ -45,6 +45,7 @@ async def get_movie_info(title):
                     'year': data['Year'],
                     'plot': data['Plot'],
                     'imdb': data['imdbRating'],
+                    'poster': data.get('Poster', 'N/A')
                 }
             return None
 
@@ -117,7 +118,8 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'trailer': trailer,
             'comment': comment,
             'rating': rating,
-            'special': special
+            'special': special,
+            'poster': movie_info['poster']
         }
         movies.append(movie)
         save_movies(movies)
@@ -136,7 +138,10 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movie = movies.pop(0)
     save_movies(movies)
     post = format_movie_post(movie)
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
+    if movie['poster'] != 'N/A':
+        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='Markdown')
+    else:
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
     await update.message.reply_text(f"پست فیلم {movie['title']} ارسال شد!")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
@@ -147,7 +152,10 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     movie = movies.pop(0)
     save_movies(movies)
     post = format_movie_post(movie)
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
+    if movie['poster'] != 'N/A':
+        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='Markdown')
+    else:
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='Markdown')
     logger.info(f"پست فیلم {movie['title']} ارسال شد.")
 
 async def main():
@@ -155,15 +163,22 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("postnow", post_now))
-    # زمان‌بندی با asyncio
     async def schedule_posts():
         while True:
-            await auto_post(app)
-            await asyncio.sleep(600)  # هر 10 دقیقه
+            try:
+                await auto_post(app)
+                await asyncio.sleep(600)  # هر 10 دقیقه
+            except Exception as e:
+                logger.error(f"خطا تو زمان‌بندی: {e}")
+                await asyncio.sleep(60)  # یه دقیقه صبر قبل از تلاش دوباره
     app.create_task(schedule_posts())
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    try:
+        await app.updater.start_polling()
+    finally:
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == '__main__':
     asyncio.run(main())
