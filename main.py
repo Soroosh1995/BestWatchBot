@@ -41,7 +41,7 @@ async def get_movie_info(title):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            async with session.get(url, timeout=10) as response:
+            async with session.get(url, timeout=15) as response:
                 data = await response.json()
                 if data['Response'] == 'True':
                     return {
@@ -71,7 +71,7 @@ async def generate_comment(title):
                     {"role": "user", "content": f"فیلم: {title}"}
                 ]
             }
-            async with session.post(url, json=payload, headers=headers, timeout=10) as response:
+            async with session.post(url, json=payload, headers=headers, timeout=15) as response:
                 data = await response.json()
                 return data['choices'][0]['message']['content']
     except Exception as e:
@@ -85,7 +85,7 @@ async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
-            async with session.get(url, timeout=10) as response:
+            async with session.get(url, timeout=15) as response:
                 data = await response.json()
                 movies = load_movies()
                 new_movies = []
@@ -103,7 +103,7 @@ async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 'year': movie_info['year'],
                                 'plot': movie_info['plot'],
                                 'imdb': movie_info['imdb'],
-                                'rotten_tomatoes': str(random.randint(70, 95)),  # شبیه‌سازی
+                                'rotten_tomatoes': str(random.randint(70, 95)),
                                 'trailer': f"https://www.youtube.com/watch?v={movie['id']}",
                                 'comment': comment,
                                 'rating': rating,
@@ -189,7 +189,7 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
         await update.message.reply_text("هیچ فیلمی تو دیتابیس نیست!")
         return
-    movie = random.choice(movies)  # انتخاب رندوم
+    movie = random.choice(movies)
     movies.remove(movie)
     save_movies(movies)
     post = format_movie_post(movie)
@@ -207,7 +207,7 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     if not movies:
         logger.info("هیچ فیلمی برای پست کردن نیست.")
         return
-    movie = random.choice(movies)  # انتخاب رندوم
+    movie = random.choice(movies)
     movies.remove(movie)
     save_movies(movies)
     post = format_movie_post(movie)
@@ -226,6 +226,10 @@ async def main():
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("postnow", post_now))
     app.add_handler(CommandHandler("fetchmovies", fetch_movies))
+    
+    await app.initialize()
+    await app.start()
+    
     async def schedule_posts():
         while True:
             try:
@@ -234,11 +238,13 @@ async def main():
             except Exception as e:
                 logger.error(f"خطا تو زمان‌بندی: {e}")
                 await asyncio.sleep(60)
-    app.create_task(schedule_posts())
-    await app.initialize()
-    await app.start()
+    
+    app.job_queue.run_repeating(auto_post, interval=600, first=10)
+    
     try:
         await app.updater.start_polling()
+    except Exception as e:
+        logger.error(f"خطا تو پولینگ: {e}")
     finally:
         await app.stop()
         await app.shutdown()
