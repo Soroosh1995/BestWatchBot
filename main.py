@@ -226,26 +226,23 @@ async def main():
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("postnow", post_now))
     app.add_handler(CommandHandler("fetchmovies", fetch_movies))
-    
+
     await app.initialize()
     await app.start()
-    
-    async def schedule_posts():
-        while True:
-            try:
-                await auto_post(app)
-                await asyncio.sleep(600)  # هر 10 دقیقه
-            except Exception as e:
-                logger.error(f"خطا تو زمان‌بندی: {e}")
-                await asyncio.sleep(60)
-    
-    app.job_queue.run_repeating(auto_post, interval=600, first=10)
-    
+
+    # زمان‌بندی با job_queue
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_post, interval=600, first=10)
+    else:
+        logger.error("JobQueue در دسترس نیست!")
+
     try:
         await app.updater.start_polling()
+        await asyncio.Event().wait()  # منتظر تا برنامه متوقف شه
     except Exception as e:
         logger.error(f"خطا تو پولینگ: {e}")
     finally:
+        await app.updater.stop()
         await app.stop()
         await app.shutdown()
 
