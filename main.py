@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
 from dotenv import load_dotenv
 from datetime import datetime
+from aiohttp import web
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -22,16 +23,20 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
+PORT = int(os.getenv('PORT', 8080))  # استفاده از پورت 8080 از env
 
 # --- کش فیلم‌ها ---
 cached_movies = []
 last_fetch_time = None
 
+async def health_check(request):
+    """Endpoint سلامت برای Render"""
+    return web.Response(text="OK")
+
 async def get_movie_info(title):
     """دریافت اطلاعات فیلم از OMDB و TMDB"""
     try:
         async with aiohttp.ClientSession() as session:
-            # دریافت از OMDB
             omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
             async with session.get(omdb_url) as response:
                 omdb_data = await response.json()
@@ -39,7 +44,6 @@ async def get_movie_info(title):
                 if omdb_data.get('Response') != 'True':
                     return None
                 
-                # دریافت از TMDB برای تریلر
                 tmdb_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
                 async with session.get(tmdb_url) as tmdb_response:
                     tmdb_data = await tmdb_response.json()
@@ -101,12 +105,11 @@ async def get_random_movie():
     if not details:
         return None
     
-    # محاسبه امتیاز (1-5 ستاره)
     try:
         imdb_score = float(details['imdb']) if details['imdb'] != 'N/A' else 0
         rating = min(5, max(1, int(imdb_score // 2)))
     except:
-        rating = 3  # مقدار پیش‌فرض اگر خطایی رخ داد
+        rating = 3
     
     return {
         **details,
@@ -210,19 +213,30 @@ async def setup_autopost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != ADMIN_ID:
         return
     
-    if 'job_queue' not in context.application.__dict__:
+    if not hasattr(context.application, 'job_queue'):
         context.application.job_queue = JobQueue()
         context.application.job_queue.set_application(context.application)
     
     context.application.job_queue.run_repeating(auto_post, interval=3600, first=10)
     await update.message.reply_text("✅ ارسال خودکار فعال شد (هر 1 ساعت)")
 
+async def init_web_server():
+    """راه‌اندازی سرور وب برای Render"""
+    app_web = web.Application()
+    app_web.router.add_get('/health', health_check)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
+    await site.start()
+    logger.info(f"سرور وب روی پورت {PORT} شروع شد")
+    return runner
+
 async def main():
     """ورودی اصلی برنامه"""
     # بارگذاری اولیه فیلم‌ها
     await fetch_popular_movies()
     
-    # ساخت برنامه
+    # ساخت برنامه تلگرام
     app = Application.builder().token(TOKEN).build()
     
     # ثبت دستورات
@@ -234,6 +248,10 @@ async def main():
     # شروع ربات
     await app.initialize()
     await app.start()
+    
+    # راه‌اندازی سرور وب
+    runner = await init_web_server()
+    
     logger.info("🤖 ربات آماده به کار!")
     
     # اجرای نامحدود
@@ -242,6 +260,7 @@ async def main():
             await asyncio.sleep(3600)
     except asyncio.CancelledError:
         await app.stop()
+        await runner.cleanup()
         logger.info("ربات متوقف شد")
 
 if __name__ == '__main__':
