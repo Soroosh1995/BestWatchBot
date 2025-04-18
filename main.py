@@ -22,6 +22,7 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
+OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 
 # کش فیلم‌ها
@@ -41,32 +42,35 @@ async def translate_plot(plot):
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "خلاصه داستان را به فارسی ترجمه کن و به 2-3 جمله (حداکثر 100 کلمه) خلاصه کن."},
+                    {"role": "system", "content": "متن را به فارسی ترجمه کن و به 2-3 جمله (حداکثر 100 کلمه) خلاصه کن. لحن ساده و صمیمی باشد."},
                     {"role": "user", "content": plot}
                 ],
-                "max_tokens": 150
+                "max_tokens": 150,
+                "temperature": 0.7
             }
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=15) as response:
+            logger.info("در حال ترجمه خلاصه داستان")
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=20) as response:
                 data = await response.json()
                 if 'choices' in data and data['choices']:
                     return data['choices'][0]['message']['content']
-                return plot
+                logger.error("هیچ ترجمه‌ای از OpenAI دریافت نشد")
+                return "داستان این فیلم درباره‌ی ماجراهای جذابی است که شما را میخکوب می‌کند!"
     except Exception as e:
         logger.error(f"خطا در ترجمه خلاصه داستان: {e}")
-        return plot
+        return "داستان این فیلم درباره‌ی ماجراهای جذابی است که شما را میخکوب می‌کند!"
 
 async def get_movie_info(movie):
-    """دریافت اطلاعات فیلم از TMDB"""
+    """دریافت اطلاعات فیلم از TMDB و OMDB (در صورت نیاز)"""
     try:
         async with aiohttp.ClientSession() as session:
+            # TMDB به‌عنوان منبع اصلی
             movie_id = movie['id']
-            # جزئیات فیلم
             details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
             logger.info(f"فچ اطلاعات فیلم {movie['title']} از TMDB")
             async with session.get(details_url, timeout=15) as response:
                 details = await response.json()
                 if not details.get('id'):
-                    logger.error(f"جزئیات فیلم {movie['title']} پیدا نشد")
+                    logger.error(f"جزئیات فیلم {movie['title']} در TMDB پیدا نشد")
                     return None
 
                 # تریلر
@@ -80,18 +84,47 @@ async def get_movie_info(movie):
                                 trailer = f"https://www.youtube.com/watch?v={video['key']}"
                                 break
 
-                # ترجمه خلاصه داستان
+                # اطلاعات اولیه از TMDB
                 plot = details.get('overview', 'No plot available')
+                poster = f"https://image.tmdb.org/t/p/w500{details.get('poster_path', '')}" if details.get('poster_path') else 'N/A'
+                imdb_score = str(round(details.get('vote_average', 0), 1))
+
+                # ترجمه خلاصه داستان
                 translated_plot = await translate_plot(plot)
+
+                # OMDB به‌عنوان مکمل (اگه چیزی ناقص بود)
+                omdb_data = {}
+                if plot == 'No plot available' or poster == 'N/A':
+                    omdb_url = f"http://www.omdbapi.com/?s={movie['title']}&apikey={OMDB_API_KEY}"
+                    logger.info(f"جستجوی فازی فیلم {movie['title']} در OMDB")
+                    async with session.get(omdb_url, timeout=15) as omdb_response:
+                        omdb_data = await omdb_response.json()
+                        if omdb_data.get('Response') == 'True' and omdb_data.get('Search'):
+                            movie_id = omdb_data['Search'][0]['imdbID']
+                            omdb_detail_url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}"
+                            async with session.get(omdb_detail_url, timeout=15) as detail_response:
+                                omdb_data = await detail_response.json()
+                                if omdb_data.get('Response') == 'True':
+                                    if plot == 'No plot available':
+                                        plot = omdb_data.get('Plot', 'No plot available')
+                                        translated_plot = await translate_plot(plot)
+                                    if poster == 'N/A':
+                                        poster = omdb_data.get('Poster', 'N/A')
+                                    imdb_score = omdb_data.get('imdbRating', imdb_score)
+
+                rotten_tomatoes = next(
+                    (r['Value'] for r in omdb_data.get('Ratings', []) if r['Source'] == 'Rotten Tomatoes'),
+                    str(random.randint(70, 95)) + '%'
+                )
 
                 return {
                     'title': details.get('title', movie['title']),
                     'year': details.get('release_date', 'N/A')[:4],
                     'plot': translated_plot,
-                    'imdb': str(round(details.get('vote_average', 0), 1)),  # امتیاز TMDB به فرمت 0-10
-                    'rotten_tomatoes': str(random.randint(70, 95)) + '%',
+                    'imdb': imdb_score,
+                    'rotten_tomatoes': rotten_tomatoes,
                     'trailer': trailer,
-                    'poster': f"https://image.tmdb.org/t/p/w500{details.get('poster_path', '')}" if details.get('poster_path') else 'N/A'
+                    'poster': poster
                 }
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات فیلم {movie['title']}: {e}")
@@ -105,21 +138,22 @@ async def generate_comment(title):
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "یه تحلیل صمیمی و هیجان‌انگیز 80-100 کلمه‌ای درباره فیلم بنویس. نقاط قوت و یه ضعف کوچیک رو بگو. از علامت‌های Markdown استفاده نکن."},
+                    {"role": "system", "content": "یه تحلیل صمیمی و هیجان‌انگیز 80-100 کلمه درباره فیلم بنویس. نقاط قوت و یه ضعف کوچیک رو بگو. لحن ساده و جذاب باشه و از علامت‌های Markdown استفاده نکن."},
                     {"role": "user", "content": f"فیلم: {title}"}
                 ],
-                "max_tokens": 150
+                "max_tokens": 150,
+                "temperature": 0.7
             }
-            logger.info(f"تولید کامنت برای {title} از OpenAI")
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=15) as response:
+            logger.info(f"تولید تحلیل برای {title} از OpenAI")
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=20) as response:
                 data = await response.json()
                 if 'choices' in data and data['choices']:
                     return data['choices'][0]['message']['content']
-                logger.error(f"هیچ کامنتی از OpenAI برای {title} دریافت نشد")
-                return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
+                logger.error(f"هیچ تحلیلی از OpenAI برای {title} دریافت نشد")
+                return "این فیلم پر از لحظات هیجان‌انگیزه که نمی‌ذاره چشم ازش برداری!"
     except Exception as e:
         logger.error(f"خطا در OpenAI API برای {title}: {e}")
-        return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
+        return "این فیلم پر از لحظات هیجان‌انگیزه که نمی‌ذاره چشم ازش برداری!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB (5 صفحه، 100 فیلم)"""
@@ -176,7 +210,7 @@ async def get_random_movie(max_attempts=3):
     return None
 
 def format_movie_post(movie):
-    """فرمت پست فیلم"""
+    """فرمت پست فیلم (دقیقاً مثل دیپ‌سیک)"""
     stars = '⭐️' * movie['rating']
     return f"""
 🎬 {movie['title']}{' 👑' if movie['special'] else ''}
@@ -184,9 +218,8 @@ def format_movie_post(movie):
 📝 خلاصه: {movie['plot']}
 🌟 امتیاز: IMDB: {movie['imdb']} | RT: {movie['rotten_tomatoes']}
 🎞 تریلر: {movie['trailer']}
-🍿 حرف ما: {movie['comment']}
+🍿 تحلیل: {movie['comment']}
 🎯 امتیاز: {stars}
-https://t.me/bestwatch_channel
 """
 
 # دستورات بات
@@ -227,21 +260,44 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = args[1].replace('عنوان: ', '')
         trailer = args[2].replace('تریلر: ', '')
         rotten = args[3].replace('Rotten: ', '')
-        # برای addmovie از TMDB جستجو می‌کنیم
+        # جستجو در TMDB
         async with aiohttp.ClientSession() as session:
             search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
             async with session.get(search_url, timeout=15) as response:
                 tmdb_data = await response.json()
                 if not tmdb_data.get('results'):
-                    await update.message.reply_text(f"فیلم {title} پیدا نشد!")
-                    return
-                movie = tmdb_data['results'][0]
-                movie_info = await get_movie_info(movie)
-                if not movie_info:
-                    await update.message.reply_text(f"فیلم {title} پیدا نشد!")
-                    return
-                movie_info['trailer'] = trailer
-                movie_info['rotten_tomatoes'] = rotten
+                    # اگه تو TMDB نبود، OMDB رو چک کن
+                    omdb_url = f"http://www.omdbapi.com/?s={title}&apikey={OMDB_API_KEY}"
+                    async with session.get(omdb_url, timeout=15) as omdb_response:
+                        omdb_data = await omdb_response.json()
+                        if omdb_data.get('Response') != 'True' or not omdb_data.get('Search'):
+                            await update.message.reply_text(f"فیلم {title} پیدا نشد!")
+                            return
+                        movie_id = omdb_data['Search'][0]['imdbID']
+                        omdb_detail_url = f"http://www.omdbapi.com/?i={movie_id}&apikey={OMDB_API_KEY}"
+                        async with session.get(omdb_detail_url, timeout=15) as detail_response:
+                            omdb_data = await detail_response.json()
+                            if omdb_data.get('Response') != 'True':
+                                await update.message.reply_text(f"فیلم {title} پیدا نشد!")
+                                return
+                            movie_info = {
+                                'title': omdb_data.get('Title', title),
+                                'year': omdb_data.get('Year', 'N/A'),
+                                'plot': await translate_plot(omdb_data.get('Plot', 'No plot available')),
+                                'imdb': omdb_data.get('imdbRating', 'N/A'),
+                                'rotten_tomatoes': rotten,
+                                'trailer': trailer,
+                                'poster': omdb_data.get('Poster', 'N/A')
+                            }
+                else:
+                    movie = tmdb_data['results'][0]
+                    movie_info = await get_movie_info(movie)
+                    if not movie_info:
+                        await update.message.reply_text(f"فیلم {title} پیدا نشد!")
+                        return
+                    movie_info['trailer'] = trailer
+                    movie_info['rotten_tomatoes'] = rotten
+
                 comment = await generate_comment(title)
                 imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
                 rating = min(5, max(1, int(imdb_score // 2)))
