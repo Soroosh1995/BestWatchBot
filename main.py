@@ -12,7 +12,10 @@ import re
 from datetime import datetime, time
 
 # --- تنظیمات اولیه ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -64,18 +67,24 @@ async def generate_comment(title):
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز."},
-                    {"role": "user", "content": f"فیلم: {title}"}
-                ]
+                    {
+                        "role": "system",
+                        "content": "یک تحلیل جذاب و حرفه‌ای درباره فیلم بنویس (حداکثر 70 کلمه). از اغراق بپرهیز و لحن منتقدانه داشته باش."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"تحلیل کوتاه درباره فیلم {title}"
+                    }
+                ],
+                "temperature": 0.7
             }
             async with session.post(url, json=payload, headers=headers, timeout=15) as response:
                 data = await response.json()
                 return data['choices'][0]['message']['content']
     except Exception as e:
         logger.error(f"خطا در generate_comment: {e}")
-        return "این فیلم یه تجربه سینمایی منحصربه‌فرده! حتماً ببینید."
+        return "این فیلم یک تجربه سینمایی منحصر به فرد ارائه می‌دهد."
 
-# --- توابع اصلی ---
 async def fetch_movies_to_cache():
     global cached_movies, last_fetch_time
     try:
@@ -102,15 +111,22 @@ async def get_random_movie():
             return None
             
         movie = random.choice(cached_movies)
-        title = movie['title']
+        title = movie.get('title', 'فیلم ناشناخته')
+        
         movie_info = await get_movie_info(title)
         if not movie_info:
-            return None
-            
+            movie_info = {
+                'title': title,
+                'year': movie.get('release_date', '').split('-')[0] if movie.get('release_date') else 'N/A',
+                'plot': movie.get('overview', 'خلاصه‌ای موجود نیست.'),
+                'imdb': str(movie.get('vote_average', 0)) + '/10',
+                'poster': f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get('poster_path') else 'N/A'
+            }
+        
         comment = await generate_comment(title)
-        imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
+        imdb_score = float(movie_info['imdb'].split('/')[0]) if '/' in movie_info['imdb'] else float(movie_info['imdb'])
         rating = min(5, max(1, int(imdb_score // 2)))
-        special = imdb_score >= 8.5
+        special = imdb_score >= 8.0
         
         return {
             'title': movie_info['title'],
@@ -143,16 +159,18 @@ def format_movie_post(movie):
     )
     return post
 
-# --- دستورات بات ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != ADMIN_ID:
+        await update.message.reply_text("❌ این بات فقط برای ادمین قابل استفاده است!")
+        return
+    
     commands = [
-        "/start - خوش‌آمدگویی",
-        "/fetchmovies - آپدیت لیست فیلم‌ها (ادمین)",
-        "/postnow - پست فوری فیلم (ادمین)"
+        "/fetchmovies - آپدیت لیست فیلم‌ها",
+        "/postnow - پست فوری فیلم"
     ]
     await update.message.reply_text(
-        "🎬 به بات Best Watch خوش اومدی!\n\n" +
-        "📜 لیست دستورات:\n" + "\n".join(commands)
+        "🤖 به پنل ادمین خوش آمدید!\n\n" +
+        "📜 دستورات:\n" + "\n".join(commands)
     )
 
 async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -221,9 +239,8 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
 async def health_check(request):
     return web.Response(text="OK")
 
-# --- اجرای اصلی ---
 async def main():
-    await fetch_movies_to_cache()  # پر کردن کش در ابتدا
+    await fetch_movies_to_cache()
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -231,13 +248,12 @@ async def main():
     app.add_handler(CommandHandler("postnow", post_now))
 
     if app.job_queue:
-        app.job_queue.run_repeating(auto_post, interval=600, first=10)  # هر 10 دقیقه
-        app.job_queue.run_daily(fetch_movies_to_cache, time=time(hour=0))  # هر روز ساعت 00:00
+        app.job_queue.run_repeating(auto_post, interval=600, first=10)
+        app.job_queue.run_daily(fetch_movies_to_cache, time=time(hour=0))
         logger.info("✅ JobQueue فعال شد!")
     else:
         logger.error("❌ JobQueue غیرفعال است!")
 
-    # سرور سلامت برای Render
     web_app = web.Application()
     web_app.add_routes([web.get('/health', health_check)])
     runner = web.AppRunner(web_app)
@@ -248,7 +264,7 @@ async def main():
     await app.initialize()
     await app.start()
     logger.info("🤖 بات فعال شد!")
-    await asyncio.Event().wait()  # اجرای بی‌نهایت
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
     asyncio.run(main())
