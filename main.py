@@ -29,6 +29,14 @@ PORT = int(os.getenv('PORT', 8080))
 cached_movies = []
 last_fetch_time = None
 
+# متن‌های پیش‌فرض برای تحلیل (برای تنوع)
+FALLBACK_COMMENTS = [
+    "این فیلم یه ماجراجویی نفس‌گیره که تا آخر شما رو میخکوب نگه می‌داره!",
+    "داستان جذاب و بازیگری فوق‌العاده، این فیلم رو به یه تجربه خاص تبدیل کرده!",
+    "پر از احساسات و لحظه‌های به‌یادموندنی، حتماً باید این فیلم رو ببینی!",
+    "یه داستان متفاوت با پایان غافلگیرکننده که ارزش دیدن داره!"
+]
+
 # توابع کمکی
 def clean_text(text):
     text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
@@ -49,15 +57,15 @@ async def translate_plot(plot):
                 "temperature": 0.7
             }
             logger.info("در حال ترجمه خلاصه داستان")
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=20) as response:
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as response:
                 data = await response.json()
                 if 'choices' in data and data['choices']:
                     return data['choices'][0]['message']['content']
                 logger.error("هیچ ترجمه‌ای از OpenAI دریافت نشد")
-                return "داستان این فیلم درباره‌ی ماجراهای جذابی است که شما را میخکوب می‌کند!"
+                return "داستان این فیلم پر از ماجراهای جذابی است که شما را سرگرم می‌کند!"
     except Exception as e:
         logger.error(f"خطا در ترجمه خلاصه داستان: {e}")
-        return "داستان این فیلم درباره‌ی ماجراهای جذابی است که شما را میخکوب می‌کند!"
+        return "داستان این فیلم پر از ماجراهای جذابی است که شما را سرگرم می‌کند!"
 
 async def get_movie_info(movie):
     """دریافت اطلاعات فیلم از TMDB و OMDB (در صورت نیاز)"""
@@ -92,7 +100,7 @@ async def get_movie_info(movie):
                 # ترجمه خلاصه داستان
                 translated_plot = await translate_plot(plot)
 
-                # OMDB به‌عنوان مکمل (اگه چیزی ناقص بود)
+                # OMDB به‌عنوان مکمل (فقط برای پوستر یا خلاصه)
                 omdb_data = {}
                 if plot == 'No plot available' or poster == 'N/A':
                     omdb_url = f"http://www.omdbapi.com/?s={movie['title']}&apikey={OMDB_API_KEY}"
@@ -138,22 +146,26 @@ async def generate_comment(title):
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "یه تحلیل صمیمی و هیجان‌انگیز 80-100 کلمه درباره فیلم بنویس. نقاط قوت و یه ضعف کوچیک رو بگو. لحن ساده و جذاب باشه و از علامت‌های Markdown استفاده نکن."},
+                    {"role": "system", "content": "یه تحلیل صمیمی و هیجان‌انگیز 80-100 کلمه درباره فیلم بنویس. نقاط قوت (مثل داستان، بازیگری، کارگردانی) و یه ضعف کوچیک (مثل ریتم یا جزئیات) رو بگو. لحن جذاب و دوستانه باشه و از علامت‌های Markdown استفاده نکن."},
                     {"role": "user", "content": f"فیلم: {title}"}
                 ],
                 "max_tokens": 150,
-                "temperature": 0.7
+                "temperature": 0.8
             }
-            logger.info(f"تولید تحلیل برای {title} از OpenAI")
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=20) as response:
+            logger.info(f"در حال تولید تحلیل برای {title} از OpenAI")
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=30) as response:
                 data = await response.json()
                 if 'choices' in data and data['choices']:
-                    return data['choices'][0]['message']['content']
+                    comment = data['choices'][0]['message']['content']
+                    if len(comment.split()) < 50:  # اگه خیلی کوتاه بود
+                        logger.warning(f"تحلیل برای {title} خیلی کوتاهه: {comment}")
+                        return random.choice(FALLBACK_COMMENTS)
+                    return comment
                 logger.error(f"هیچ تحلیلی از OpenAI برای {title} دریافت نشد")
-                return "این فیلم پر از لحظات هیجان‌انگیزه که نمی‌ذاره چشم ازش برداری!"
+                return random.choice(FALLBACK_COMMENTS)
     except Exception as e:
         logger.error(f"خطا در OpenAI API برای {title}: {e}")
-        return "این فیلم پر از لحظات هیجان‌انگیزه که نمی‌ذاره چشم ازش برداری!"
+        return random.choice(FALLBACK_COMMENTS)
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB (5 صفحه، 100 فیلم)"""
@@ -214,11 +226,17 @@ def format_movie_post(movie):
     stars = '⭐️' * movie['rating']
     return f"""
 🎬 {movie['title']}{' 👑' if movie['special'] else ''}
+
 📅 سال: {movie['year']}
+
 📝 خلاصه: {movie['plot']}
+
 🌟 امتیاز: IMDB: {movie['imdb']} | RT: {movie['rotten_tomatoes']}
+
 🎞 تریلر: {movie['trailer']}
+
 🍿 تحلیل: {movie['comment']}
+
 🎯 امتیاز: {stars}
 """
 
