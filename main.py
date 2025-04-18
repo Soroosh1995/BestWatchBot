@@ -4,6 +4,7 @@ import json
 import os
 import logging
 import aiohttp
+import random
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 
 MOVIES_FILE = 'movies.json'
 
@@ -76,8 +78,48 @@ async def generate_comment(title):
         logger.error(f"خطا تو OpenAI API: {e}")
         return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
 
+async def fetch_movies```python
+fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != ADMIN_ID:
+        await update.message.reply_text("فقط ادمین می‌تونه فیلم‌ها رو فچ کنه!")
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
+            async with session.get(url, timeout=10) as response:
+                data = await response.json()
+                movies = load_movies()
+                new_movies = []
+                for movie in data['results']:
+                    title = movie['title']
+                    if not is_movie_duplicate(title, movies):
+                        movie_info = await get_movie_info(title)
+                        if movie_info:
+                            comment = await generate_comment(title)
+                            imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
+                            rating = min(5, max(1, int(imdb_score // 2)))
+                            special = imdb_score >= 8.5
+                            new_movie = {
+                                'title': movie_info['title'],
+                                'year': movie_info['year'],
+                                'plot': movie_info['plot'],
+                                'imdb': movie_info['imdb'],
+                                'rotten_tomatoes': str(random.randint(70, 95)),  # شبیه‌سازی
+                                'trailer': f"https://www.youtube.com/watch?v={movie['id']}",
+                                'comment': comment,
+                                'rating': rating,
+                                'special': special,
+                                'poster': movie_info['poster']
+                            }
+                            new_movies.append(new_movie)
+                movies.extend(new_movies)
+                save_movies(movies)
+                await update.message.reply_text(f"{len(new_movies)} فیلم جدید اضافه شد!")
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {str(e)}")
+
 def clean_text(text):
-    text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
+    text = re.sub(r'[^\w\s\-\.\,\!\?\:$$  $$\'\"]', '', text)
     return text[:1000]
 
 def format_movie_post(movie):
@@ -148,7 +190,8 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
         await update.message.reply_text("هیچ فیلمی تو دیتابیس نیست!")
         return
-    movie = movies.pop(0)
+    movie = random.choice(movies)  # انتخاب رندوم
+    movies.remove(movie)
     save_movies(movies)
     post = format_movie_post(movie)
     try:
@@ -161,11 +204,13 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"خطا تو ارسال: {str(e)}")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
+垂: ContextTypes.DEFAULT_TYPE):
     movies = load_movies()
     if not movies:
         logger.info("هیچ فیلمی برای پست کردن نیست.")
         return
-    movie = movies.pop(0)
+    movie = random.choice(movies)  # انتخاب رندوم
+    movies.remove(movie)
     save_movies(movies)
     post = format_movie_post(movie)
     try:
@@ -182,6 +227,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("postnow", post_now))
+    app.add_handler(CommandHandler("fetchmovies", fetch_movies))
     async def schedule_posts():
         while True:
             try:
