@@ -78,8 +78,7 @@ async def generate_comment(title):
         logger.error(f"خطا تو OpenAI API: {e}")
         return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
 
-async def fetch_movies```python
-fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != ADMIN_ID:
         await update.message.reply_text("فقط ادمین می‌تونه فیلم‌ها رو فچ کنه!")
         return
@@ -119,7 +118,7 @@ fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"خطا: {str(e)}")
 
 def clean_text(text):
-    text = re.sub(r'[^\w\s\-\.\,\!\?\:$$  $$\'\"]', '', text)
+    text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
     return text[:1000]
 
 def format_movie_post(movie):
@@ -204,7 +203,6 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"خطا تو ارسال: {str(e)}")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
-垂: ContextTypes.DEFAULT_TYPE):
     movies = load_movies()
     if not movies:
         logger.info("هیچ فیلمی برای پست کردن نیست.")
