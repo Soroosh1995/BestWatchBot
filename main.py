@@ -1,6 +1,5 @@
 import telegram
 import asyncio
-import json
 import os
 import logging
 import aiohttp
@@ -10,7 +9,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 from aiohttp import web
 import re
+from datetime import datetime, time
 
+# --- تنظیمات اولیه ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,22 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 
+# --- کش فیلم‌ها ---
+cached_movies = []
+last_fetch_time = None
+
+# --- توابع کمکی ---
+def clean_text(text):
+    text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
+    return text[:1000]
+
 async def get_movie_info(title):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            logger.info(f"در حال فچ کردن اطلاعات فیلم {title} از OMDB")
             async with session.get(url, timeout=15) as response:
                 data = await response.json()
-                if data['Response'] == 'True':
+                if data.get('Response') == 'True':
                     return {
                         'title': data['Title'],
                         'year': data['Year'],
@@ -38,10 +47,10 @@ async def get_movie_info(title):
                         'imdb': data['imdbRating'],
                         'poster': data.get('Poster', 'N/A')
                     }
-                logger.error(f"فیلم {title} در OMDB پیدا نشد")
+                logger.error(f"OMDB پاسخ نامعتبر برای فیلم {title}: {data}")
                 return None
     except Exception as e:
-        logger.error(f"خطا در OMDB API برای {title}: {e}")
+        logger.error(f"خطا در get_movie_info: {e}")
         return None
 
 async def generate_comment(title):
@@ -55,62 +64,69 @@ async def generate_comment(title):
             payload = {
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز. از علامت‌های Markdown مثل * یا _ استفاده نکن."},
+                    {"role": "system", "content": "یه توضیح جذاب و کوتاه (50-70 کلمه) درباره فیلم بنویس. لحن صمیمی و هیجان‌انگیز."},
                     {"role": "user", "content": f"فیلم: {title}"}
                 ]
             }
-            logger.info(f"در حال تولید کامنت برای {title} از OpenAI")
             async with session.post(url, json=payload, headers=headers, timeout=15) as response:
                 data = await response.json()
-                if 'choices' in data and len(data['choices']) > 0:
-                    return data['choices'][0]['message']['content']
-                logger.error(f"هیچ کامنتی از OpenAI برای {title} دریافت نشد")
-                return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
+                return data['choices'][0]['message']['content']
     except Exception as e:
-        logger.error(f"خطا در OpenAI API برای {title}: {e}")
-        return "این فیلم یه تجربه فوق‌العاده‌ست! حتماً ببینید!"
+        logger.error(f"خطا در generate_comment: {e}")
+        return "این فیلم یه تجربه سینمایی منحصربه‌فرده! حتماً ببینید."
+
+# --- توابع اصلی ---
+async def fetch_movies_to_cache():
+    global cached_movies, last_fetch_time
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
+            async with session.get(url, timeout=15) as response:
+                data = await response.json()
+                if 'results' in data and data['results']:
+                    cached_movies = data['results']
+                    last_fetch_time = datetime.now()
+                    logger.info(f"لیست فیلم‌ها آپدیت شد. تعداد: {len(cached_movies)}")
+                else:
+                    logger.error("خطا در دریافت لیست از TMDB: results خالی است!")
+    except Exception as e:
+        logger.error(f"خطا در fetch_movies_to_cache: {e}")
 
 async def get_random_movie():
     try:
-        async with aiohttp.ClientSession() as session:
-            page = random.randint(1, 10)
-            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
-            logger.info(f"در حال فچ کردن فیلم از TMDB: {url}")
-            async with session.get(url, timeout=15) as response:
-                data = await response.json()
-                if 'results' not in data or not data['results']:
-                    logger.error("هیچ نتیجه‌ای از TMDB برنگشت!")
-                    return None
-                movie = random.choice(data['results'])
-                title = movie['title']
-                logger.info(f"فیلم انتخاب‌شده: {title}")
-                movie_info = await get_movie_info(title)
-                if not movie_info:
-                    logger.error(f"اطلاعات فیلم {title} از OMDB پیدا نشد!")
-                    return None
-                comment = await generate_comment(title)
-                imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
-                rating = min(5, max(1, int(imdb_score // 2)))
-                special = imdb_score >= 8.5
-                return {
-                    'title': movie_info['title'],
-                    'year': movie_info['year'],
-                    'plot': movie_info['plot'],
-                    'imdb': movie_info['imdb'],
-                    'rotten_tomatoes': str(random.randint(70, 95)),
-                    'trailer': f"https://www.youtube.com/watch?v={movie['id']}",
-                    'comment': comment,
-                    'rating': rating,
-                    'special': special,
-                    'poster': movie_info['poster']
-                }
+        if not cached_movies or (last_fetch_time and (datetime.now() - last_fetch_time).seconds >= 86400):
+            await fetch_movies_to_cache()
+            
+        if not cached_movies:
+            logger.error("لیست فیلم‌ها خالی است!")
+            return None
+            
+        movie = random.choice(cached_movies)
+        title = movie['title']
+        movie_info = await get_movie_info(title)
+        if not movie_info:
+            return None
+            
+        comment = await generate_comment(title)
+        imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
+        rating = min(5, max(1, int(imdb_score // 2)))
+        special = imdb_score >= 8.5
+        
+        return {
+            'title': movie_info['title'],
+            'year': movie_info['year'],
+            'plot': movie_info['plot'],
+            'imdb': movie_info['imdb'],
+            'rotten_tomatoes': str(random.randint(70, 95)),
+            'trailer': f"https://www.youtube.com/watch?v={movie['id']}",
+            'comment': comment,
+            'rating': rating,
+            'special': special,
+            'poster': movie_info['poster']
+        }
     except Exception as e:
-        logger.error(f"خطا در فچ کردن فیلم از TMDB: {str(e)}")
+        logger.error(f"خطا در get_random_movie: {e}")
         return None
-
-def clean_text(text):
-    text = re.sub(r'[^\w\s\-\.\,\!\?\:\(\)\'\"]', '', text)
-    return text[:1000]
 
 def format_movie_post(movie):
     rating_stars = {5: '⭐️⭐️⭐️⭐️⭐️', 4: '⭐️⭐️⭐️⭐️', 3: '⭐️⭐️⭐️', 2: '⭐️⭐️', 1: '⭐️'}
@@ -127,120 +143,101 @@ def format_movie_post(movie):
     )
     return post
 
+# --- دستورات بات ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.message.from_user.id) != ADMIN_ID:
-        await update.message.reply_text("این بات فقط برای ادمینه!")
-        return
-    message = (
-        "🎬 به بات Best Watch خوش اومدی!\n\n"
-        "این بات برای مدیریت کانال @bestwatch_channelه.\n"
-        "دستورات موجود:\n"
-        "/start - نمایش این پیام\n"
-        "/addmovie - اضافه کردن فیلم دستی (عنوان، تریلر، امتیاز Rotten)\n"
-        "/postnow - پست فوری یه فیلم رندوم از TMDB\n\n"
-        "هر 10 دقیقه یه فیلم خودکار پست می‌شه."
+    commands = [
+        "/start - خوش‌آمدگویی",
+        "/fetchmovies - آپدیت لیست فیلم‌ها (ادمین)",
+        "/postnow - پست فوری فیلم (ادمین)"
+    ]
+    await update.message.reply_text(
+        "🎬 به بات Best Watch خوش اومدی!\n\n" +
+        "📜 لیست دستورات:\n" + "\n".join(commands)
     )
-    await update.message.reply_text(message)
 
-async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != ADMIN_ID:
-        await update.message.reply_text("فقط ادمین می‌تونه فیلم اضافه کنه!")
+        await update.message.reply_text("❌ فقط ادمین می‌تواند این دستور را اجرا کند!")
         return
-    try:
-        args = update.message.text.split('\n')
-        if len(args) < 3:
-            await update.message.reply_text("فرمت: /addmovie\nعنوان: <عنوان>\nتریلر: <لینک>\nRotten: <امتیاز>")
-            return
-        title = args[1].replace('عنوان: ', '')
-        trailer = args[2].replace('تریلر: ', '')
-        rotten = args[3].replace('Rotten: ', '')
-        movie_info = await get_movie_info(title)
-        if not movie_info:
-            await update.message.reply_text(f"فیلم {title} پیدا نشد!")
-            return
-        comment = await generate_comment(title)
-        imdb_score = float(movie_info['imdb']) if movie_info['imdb'] != 'N/A' else 0
-        rating = min(5, max(1, int(imdb_score // 2)))
-        special = imdb_score >= 8.5
-        movie = {
-            'title': movie_info['title'],
-            'year': movie_info['year'],
-            'plot': movie_info['plot'],
-            'imdb': movie_info['imdb'],
-            'rotten_tomatoes': rotten,
-            'trailer': trailer,
-            'comment': comment,
-            'rating': rating,
-            'special': special,
-            'poster': movie_info['poster']
-        }
-        post = format_movie_post(movie)
-        try:
-            if movie['poster'] != 'N/A':
-                await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='HTML')
-            else:
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='HTML')
-            await update.message.reply_text(f"فیلم {movie['title']} اضافه و پست شد!")
-        except Exception as e:
-            await update.message.reply_text(f"خطا در ارسال: {str(e)}")
-    except Exception as e:
-        await update.message.reply_text(f"خطا: {str(e)}")
+    
+    await update.message.reply_text("در حال دریافت لیست جدید از TMDB...")
+    await fetch_movies_to_cache()
+    await update.message.reply_text(f"✅ لیست فیلم‌ها آپدیت شد! (تعداد: {len(cached_movies)})")
 
 async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.message.from_user.id) != ADMIN_ID:
-        await update.message.reply_text("فقط ادمین می‌تونه پست فوری بفرسته!")
+        await update.message.reply_text("❌ فقط ادمین می‌تواند این دستور را اجرا کند!")
         return
-    logger.info("اجرای دستور /postnow")
+        
     movie = await get_random_movie()
     if not movie:
-        await update.message.reply_text("هیچ فیلمی پیدا نشد! دوباره امتحان کن.")
+        await update.message.reply_text("⚠️ خطا: هیچ فیلمی پیدا نشد! از /fetchmovies استفاده کن.")
         return
+        
     post = format_movie_post(movie)
     try:
         if movie['poster'] != 'N/A':
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='HTML')
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=movie['poster'],
+                caption=post,
+                parse_mode='HTML'
+            )
         else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='HTML')
-        await update.message.reply_text(f"پست فیلم {movie['title']} ارسال شد!")
-        logger.info(f"فیلم {movie['title']} با موفقیت پست شد")
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=post,
+                parse_mode='HTML'
+            )
+        await update.message.reply_text(f"✅ پست فیلم {movie['title']} ارسال شد!")
     except Exception as e:
-        logger.error(f"خطا در ارسال پست فوری: {str(e)}")
-        await update.message.reply_text(f"خطا در ارسال: {str(e)}")
+        await update.message.reply_text(f"❌ خطا در ارسال پست: {str(e)}")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("شروع پست خودکار...")
     movie = await get_random_movie()
     if not movie:
-        logger.error("هیچ فیلمی برای پست خودکار پیدا نشد!")
+        logger.error("⚠️ خطا در پست خودکار: هیچ فیلمی پیدا نشد!")
         return
+        
     post = format_movie_post(movie)
     try:
         if movie['poster'] != 'N/A':
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=movie['poster'], caption=post, parse_mode='HTML')
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=movie['poster'],
+                caption=post,
+                parse_mode='HTML'
+            )
         else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode='HTML')
-        logger.info(f"پست خودکار فیلم {movie['title']} ارسال شد.")
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=post,
+                parse_mode='HTML'
+            )
+        logger.info(f"✅ پست خودکار ارسال شد: {movie['title']}")
     except Exception as e:
-        logger.error(f"خطا در ارسال پست خودکار: {str(e)}")
+        logger.error(f"❌ خطا در پست خودکار: {str(e)}")
 
 async def health_check(request):
     return web.Response(text="OK")
 
+# --- اجرای اصلی ---
 async def main():
+    await fetch_movies_to_cache()  # پر کردن کش در ابتدا
+    
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("addmovie", add_movie))
+    app.add_handler(CommandHandler("fetchmovies", fetch_movies))
     app.add_handler(CommandHandler("postnow", post_now))
 
-    await app.initialize()
-    await app.start()
-
     if app.job_queue:
-        app.job_queue.run_repeating(auto_post, interval=600, first=10)
-        logger.info("JobQueue برای پست خودکار هر 10 دقیقه فعال شد")
+        app.job_queue.run_repeating(auto_post, interval=600, first=10)  # هر 10 دقیقه
+        app.job_queue.run_daily(fetch_movies_to_cache, time=time(hour=0))  # هر روز ساعت 00:00
+        logger.info("✅ JobQueue فعال شد!")
     else:
-        logger.error("JobQueue در دسترس نیست!")
+        logger.error("❌ JobQueue غیرفعال است!")
 
+    # سرور سلامت برای Render
     web_app = web.Application()
     web_app.add_routes([web.get('/health', health_check)])
     runner = web.AppRunner(web_app)
@@ -248,17 +245,10 @@ async def main():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
 
-    try:
-        await app.updater.start_polling(drop_pending_updates=True)
-        logger.info("پولینگ شروع شد")
-        await asyncio.Event().wait()
-    except Exception as e:
-        logger.error(f"خطا در پولینگ: {e}")
-    finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
-        await runner.cleanup()
+    await app.initialize()
+    await app.start()
+    logger.info("🤖 بات فعال شد!")
+    await asyncio.Event().wait()  # اجرای بی‌نهایت
 
 if __name__ == '__main__':
     asyncio.run(main())
