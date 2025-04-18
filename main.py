@@ -155,7 +155,12 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("postnow", post_now))
-    app.job_queue.run_repeating(auto_post, interval=600, first=10)
+    # زمان‌بندی با asyncio
+    async def schedule_posts():
+        while True:
+            await auto_post(app)
+            await asyncio.sleep(600)  # هر 10 دقیقه
+    app.create_task(schedule_posts())
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
