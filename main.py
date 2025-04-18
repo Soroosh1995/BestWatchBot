@@ -57,7 +57,7 @@ async def get_movie_info(title):
     try:
         async with aiohttp.ClientSession() as session:
             # TMDB برای خلاصه و تریلر
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
+            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
             async with session.get(search_url) as tmdb_response:
                 tmdb_data = await tmdb_response.json()
                 tmdb_plot = tmdb_data.get('results', [{}])[0].get('overview', '')
@@ -331,12 +331,9 @@ async def health_check(request):
     """چک سلامت سرور"""
     return web.Response(text="OK")
 
-async def main():
-    """راه‌اندازی بات"""
-    logger.info("شروع راه‌اندازی بات...")
-    if not await fetch_movies_to_cache():
-        logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
-    
+async def run_bot():
+    """راه‌اندازی بات تلگرام"""
+    logger.info("شروع راه‌اندازی بات تلگرام...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -352,13 +349,44 @@ async def main():
         logger.error("JobQueue فعال نشد")
         await app.bot.send_message(ADMIN_ID, "❌ خطا: JobQueue فعال نشد")
     
-    runner = web.AppRunner(web.Application())
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    return app
+
+async def run_web():
+    """راه‌اندازی سرور وب برای Render"""
+    logger.info("شروع راه‌اندازی سرور وب...")
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
+    logger.info(f"سرور وب روی پورت {PORT} فعال شد")
+    return runner
+
+async def main():
+    """راه‌اندازی بات و سرور وب"""
+    logger.info("شروع برنامه...")
+    if not await fetch_movies_to_cache():
+        logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
     
-    await app.run_polling()
-    logger.info("🤖 ربات با موفقیت راه‌اندازی شد")
+    # راه‌اندازی بات و سرور وب
+    bot_app = await run_bot()
+    web_runner = await run_web()
+    
+    # نگه‌داشتن برنامه در حال اجرا
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except KeyboardInterrupt:
+        logger.info("خاموش کردن بات...")
+    finally:
+        await bot_app.updater.stop()
+        await bot_app.stop()
+        await bot_app.shutdown()
+        await web_runner.cleanup()
 
 if __name__ == '__main__':
     asyncio.run(main())
