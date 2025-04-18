@@ -41,21 +41,21 @@ async def get_movie_info(title):
     try:
         async with aiohttp.ClientSession() as session:
             omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            async with session.get(omdb_url, timeout=15) as response:
+            async with session.get(omdb_url) as response:
                 omdb_data = await response.json()
                 
                 if omdb_data.get('Response') != 'True':
                     return None
                 
                 search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
-                async with session.get(search_url, timeout=15) as tmdb_response:
+                async with session.get(search_url) as tmdb_response:
                     tmdb_data = await tmdb_response.json()
                     
                     trailer = "N/A"
                     if tmdb_data.get('results'):
                         movie_id = tmdb_data['results'][0]['id']
                         videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                        async with session.get(videos_url, timeout=15) as videos_response:
+                        async with session.get(videos_url) as videos_response:
                             videos_data = await videos_response.json()
                             if videos_data.get('results'):
                                 for video in videos_data['results']:
@@ -111,8 +111,7 @@ async def generate_comment(title):
             async with session.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers=headers,
-                json=payload,
-                timeout=30
+                json=payload
             ) as response:
                 data = await response.json()
                 return data['choices'][0]['message']['content']
@@ -125,7 +124,7 @@ async def fetch_movies_to_cache():
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
-            async with session.get(url, timeout=15) as response:
+            async with session.get(url) as response:
                 data = await response.json()
                 if 'results' in data and data['results']:
                     cached_movies = data['results']
@@ -175,7 +174,7 @@ async def get_random_movie():
 def format_movie_post(movie):
     stars = '⭐️' * movie['rating']
     special = ' 👑' if movie['special'] else ''
-    channel_link = '[\\@BestWatch (https://t.me/bestwatch\\_channel)](https://t.me/bestwatch_channel)'
+    channel_link = '[\\@BestWatch](https://t.me/bestwatch_channel)'
     
     return f"""
 *🎬 {movie['title']}{special}*
@@ -210,6 +209,31 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("در حال آماده‌سازی پست...")
         movie = await get_random_movie()
         if movie:
+            try:
+                if movie['poster'] != 'N/A':
+                    await context.bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=movie['poster'],
+                        caption=format_movie_post(movie),
+                        parse_mode='MarkdownV2'
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=format_movie_post(movie),
+                        parse_mode='MarkdownV2'
+                    )
+                await msg.edit_text(f"✅ پست {movie['title']} ارسال شد")
+            except Exception as e:
+                logger.error(f"خطا در ارسال پست: {e}")
+                await msg.edit_text("❌ خطا در ارسال پست")
+        else:
+            await msg.edit_text("❌ خطا در یافتن فیلم")
+
+async def auto_post(context: ContextTypes.DEFAULT_TYPE):
+    movie = await get_random_movie()
+    if movie:
+        try:
             if movie['poster'] != 'N/A':
                 await context.bot.send_photo(
                     chat_id=CHANNEL_ID,
@@ -223,57 +247,46 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=format_movie_post(movie),
                     parse_mode='MarkdownV2'
                 )
-            await msg.edit_text(f"✅ پست {movie['title']} ارسال شد")
-        else:
-            await msg.edit_text("❌ خطا در یافتن فیلم")
-
-async def auto_post(context: ContextTypes.DEFAULT_TYPE):
-    movie = await get_random_movie()
-    if movie:
-        if movie['poster'] != 'N/A':
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=movie['poster'],
-                caption=format_movie_post(movie),
-                parse_mode='MarkdownV2'
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=format_movie_post(movie),
-                parse_mode='MarkdownV2'
-            )
+        except Exception as e:
+            logger.error(f"خطا در ارسال خودکار پست: {e}")
 
 async def health_check(request):
     return web.Response(text="OK")
 
 async def main():
+    # راه‌اندازی اولیه
     if not await fetch_movies_to_cache():
         logger.error("❌ خطا در دریافت اولیه لیست فیلم‌ها")
     
+    # تنظیمات Application
     app = Application.builder() \
         .token(TELEGRAM_TOKEN) \
-        .read_timeout(30) \
-        .write_timeout(30) \
         .build()
     
+    # ثبت دستورات
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fetchmovies", fetch_movies))
     app.add_handler(CommandHandler("postnow", post_now))
     
-    if app.job_queue:
-        app.job_queue.run_repeating(auto_post, interval=600, first=10)
+    # تنظیم JobQueue
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_repeating(auto_post, interval=600, first=10)
     
-    web_app = web.Application()
-    web_app.add_routes([web.get('/health', health_check)])
-    runner = web.AppRunner(web_app)
+    # راه‌اندازی سرور سلامت
+    runner = web.AppRunner(web.Application())
     await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', PORT).start()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
     
+    # شروع بات
     await app.initialize()
     await app.start()
     logger.info("🤖 ربات با موفقیت راه‌اندازی شد")
-    await asyncio.Event().wait()
+    
+    # اجرای نامحدود
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     asyncio.run(main())
