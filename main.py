@@ -23,7 +23,7 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
-PORT = int(os.getenv('PORT', 8080))  # استفاده از پورت 8080 از env
+PORT = int(os.getenv('PORT', 8080))
 
 # --- کش فیلم‌ها ---
 cached_movies = []
@@ -33,26 +33,53 @@ async def health_check(request):
     """Endpoint سلامت برای Render"""
     return web.Response(text="OK")
 
-async def get_movie_info(title):
-    """دریافت اطلاعات فیلم از OMDB و TMDB"""
+async def fetch_popular_movies():
+    """بروزرسانی لیست فیلم‌های پرطرفدار"""
+    global cached_movies, last_fetch_time
     try:
         async with aiohttp.ClientSession() as session:
-            omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            async with session.get(omdb_url) as response:
-                omdb_data = await response.json()
+            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
+            async with session.get(url, timeout=10) as response:
+                if response.status != 200:
+                    logger.error(f"خطا در دریافت از TMDB: {response.status}")
+                    return False
                 
+                data = await response.json()
+                if not data.get('results'):
+                    logger.error("هیچ فیلمی در پاسخ TMDB یافت نشد")
+                    return False
+                
+                cached_movies = data['results']
+                last_fetch_time = datetime.now()
+                logger.info(f"لیست با {len(cached_movies)} فیلم بروز شد")
+                return True
+    except Exception as e:
+        logger.error(f"خطا در بروزرسانی فیلم‌ها: {str(e)}")
+        return False
+
+async def get_movie_info(title):
+    """دریافت اطلاعات فیلم با مدیریت خطا"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            # دریافت از OMDB
+            omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+            async with session.get(omdb_url, timeout=10) as response:
+                if response.status != 200:
+                    return None
+                
+                omdb_data = await response.json()
                 if omdb_data.get('Response') != 'True':
                     return None
                 
+                # دریافت از TMDB برای تریلر
                 tmdb_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}"
-                async with session.get(tmdb_url) as tmdb_response:
+                async with session.get(tmdb_url, timeout=10) as tmdb_response:
                     tmdb_data = await tmdb_response.json()
-                    
                     trailer = "N/A"
                     if tmdb_data.get('results'):
                         movie_id = tmdb_data['results'][0]['id']
                         videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                        async with session.get(videos_url) as videos_response:
+                        async with session.get(videos_url, timeout=10) as videos_response:
                             videos_data = await videos_response.json()
                             if videos_data.get('results'):
                                 for video in videos_data['results']:
@@ -72,50 +99,44 @@ async def get_movie_info(title):
                         'poster': omdb_data.get('Poster', 'N/A')
                     }
     except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات فیلم: {e}")
+        logger.error(f"خطا در دریافت اطلاعات فیلم: {str(e)}")
         return None
-
-async def fetch_popular_movies():
-    """بروزرسانی لیست فیلم‌های پرطرفدار"""
-    global cached_movies, last_fetch_time
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}"
-            async with session.get(url) as response:
-                data = await response.json()
-                cached_movies = data.get('results', [])
-                last_fetch_time = datetime.now()
-                logger.info(f"لیست فیلم‌ها با {len(cached_movies)} فیلم بروز شد")
-                return True
-    except Exception as e:
-        logger.error(f"خطا در بروزرسانی فیلم‌ها: {e}")
-        return False
 
 async def get_random_movie():
-    """انتخاب تصادفی یک فیلم با جزئیات کامل"""
-    if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
-        await fetch_popular_movies()
-    
-    if not cached_movies:
-        return None
-    
-    movie = random.choice(cached_movies)
-    details = await get_movie_info(movie.get('title', ''))
-    
-    if not details:
-        return None
-    
+    """انتخاب تصادفی یک فیلم با تلاش چندباره"""
     try:
-        imdb_score = float(details['imdb']) if details['imdb'] != 'N/A' else 0
-        rating = min(5, max(1, int(imdb_score // 2)))
-    except:
-        rating = 3
-    
-    return {
-        **details,
-        'rating': rating,
-        'special': imdb_score >= 8.0 if 'imdb_score' in locals() else False
-    }
+        # بروزرسانی لیست اگر خالی است یا بیش از 24 ساعت گذشته
+        if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
+            if not await fetch_popular_movies():
+                return None
+
+        # 3 بار تلاش برای یافتن فیلم با اطلاعات کامل
+        for _ in range(3):
+            movie = random.choice(cached_movies)
+            title = movie.get('title') or movie.get('original_title')
+            if not title:
+                continue
+            
+            details = await get_movie_info(title)
+            if details:
+                try:
+                    imdb_score = float(details['imdb']) if details['imdb'] != 'N/A' else 0
+                    rating = min(5, max(1, int(imdb_score // 2)))
+                except (ValueError, TypeError):
+                    rating = 3
+                
+                return {
+                    **details,
+                    'rating': rating,
+                    'special': imdb_score >= 8.0 if 'imdb_score' in locals() else False
+                }
+
+        logger.error("پس از 3 بار تلاش، فیلم مناسبی یافت نشد")
+        return None
+
+    except Exception as e:
+        logger.error(f"خطای غیرمنتظره در انتخاب فیلم: {str(e)}")
+        return None
 
 def format_movie_post(movie):
     """فرمت‌دهی پیام نهایی"""
@@ -137,7 +158,7 @@ def format_movie_post(movie):
 """
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور شروع برای ادمین"""
+    """دستور شروع"""
     if str(update.effective_user.id) == ADMIN_ID:
         await update.message.reply_text("""
 🤖 *دستورات مدیریتی:*
@@ -164,7 +185,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movie = await get_random_movie()
     
     if not movie:
-        await msg.edit_text("❌ خطا در یافتن فیلم")
+        await msg.edit_text("❌ خطا در یافتن فیلم مناسب")
         return
     
     try:
@@ -183,7 +204,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         await msg.edit_text(f"✅ فیلم {movie['title']} ارسال شد")
     except Exception as e:
-        logger.error(f"خطا در ارسال فیلم: {e}")
+        logger.error(f"خطا در ارسال فیلم: {str(e)}")
         await msg.edit_text("❌ خطا در ارسال فیلم")
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
@@ -206,7 +227,7 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
                 )
             logger.info(f"فیلم {movie['title']} به صورت خودکار ارسال شد")
         except Exception as e:
-            logger.error(f"خطا در ارسال خودکار: {e}")
+            logger.error(f"خطا در ارسال خودکار: {str(e)}")
 
 async def setup_autopost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تنظیم ارسال خودکار"""
