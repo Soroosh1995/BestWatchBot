@@ -394,14 +394,20 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لطفاً نام فیلم را وارد کنید: /addmovie <نام فیلم>")
         return
     
-    title = ' '.join(context.args)
+    title = ' '.join(context.args).strip()
+    if not title:
+        await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد")
+        return
+    
     msg = await update.message.reply_text(f"در حال اضافه کردن فیلم {title}...")
+    logger.info(f"تلاش برای اضافه کردن فیلم: {title}")
     
     try:
         async with aiohttp.ClientSession() as session:
             search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
             async with session.get(search_url) as response:
                 data = await response.json()
+                logger.info(f"پاسخ TMDB برای {title}: {data}")
                 if 'results' not in data or not data['results']:
                     await msg.edit_text(f"❌ فیلم {title} یافت نشد")
                     return
@@ -414,7 +420,7 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 
                 movie_id = movie['id']
-                if any(m['id'] == movie_id for m in cached_movies):
+                if movie_id in [m['id'] for m in cached_movies]:
                     await msg.edit_text(f"❌ فیلم {title} قبلاً در لیست است")
                     return
                 
@@ -425,7 +431,7 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ خطا در اضافه کردن فیلم: {str(e)}")
 
 async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بررسی بازدید کانال"""
+    """بررسی بازدید کانال با API خام تلگرام"""
     if str(update.message.from_user.id) != ADMIN_ID:
         return
     msg = await update.message.reply_text("در حال بررسی بازدید کانال...")
@@ -436,17 +442,29 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         views_week = []
         views_month = []
         
-        async for message in context.bot.get_chat_history(CHANNEL_ID, limit=100):
-            if not hasattr(message, 'views') or not message.views:
-                continue
-            message_time = message.date
-            time_diff = now - message_time
-            if time_diff <= timedelta(hours=24):
-                views_24h.append(message.views)
-            if time_diff <= timedelta(days=7):
-                views_week.append(message.views)
-            if time_diff <= timedelta(days=30):
-                views_month.append(message.views)
+        # استفاده از getUpdates برای گرفتن پیام‌های کانال
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-100"
+            async with session.get(url) as response:
+                data = await response.json()
+                if not data.get('ok') or not data.get('result'):
+                    raise Exception("هیچ پیامی دریافت نشد")
+                
+                for update in data['result']:
+                    if 'channel_post' in update:
+                        post = update['channel_post']
+                        if post.get('chat', {}).get('id') != int(CHANNEL_ID.replace('@', '')):
+                            continue
+                        if not post.get('views'):
+                            continue
+                        message_time = datetime.fromtimestamp(post['date'])
+                        time_diff = now - message_time
+                        if time_diff <= timedelta(hours=24):
+                            views_24h.append(post['views'])
+                        if time_diff <= timedelta(days=7):
+                            views_week.append(post['views'])
+                        if time_diff <= timedelta(days=30):
+                            views_month.append(post['views'])
         
         avg_24h = sum(views_24h) / len(views_24h) if views_24h else 0
         avg_week = sum(views_week) / len(views_week) if views_week else 0
@@ -550,8 +568,8 @@ async def run_bot():
         job_queue.run_repeating(auto_post, interval=7200, first=10)
         job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)
     else:
-        logger.error("JobQueue فعال نشد")
-        await app.bot.send_message(ADMIN_ID, "❌ خطا: JobQueue فعال نشد")
+        logger.error("JobQueue فعال نشد، ادامه بدون زمان‌بندی")
+        await app.bot.send_message(ADMIN_ID, "⚠️ هشدار: JobQueue فعال نشد، پست‌های خودکار غیرفعال هستند")
     
     await app.initialize()
     await app.start()
