@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from aiohttp import web
 import re
 from datetime import datetime, time
-
+pip install --upgrade pip
 # --- تنظیمات اولیه ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
