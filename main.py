@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from aiohttp import web
 import re
 from datetime import datetime, time
-pip install --upgrade pip
+
 # --- تنظیمات اولیه ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -22,8 +22,6 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
-OMDB_API_KEY = os.getenv('OMDB_API_KEY')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 
@@ -37,7 +35,6 @@ FALLBACK_MOVIE = {
     'year': '2010',
     'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند.',
     'imdb': '8.8/10',
-    'rotten_tomatoes': '87%',
     'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
     'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
     'comment': 'اینسپشن، اثری علمی-تخیلی از نولان، با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازی دی‌کاپریو و کارگردانی بی‌نقص، فیلم را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست که ممکن است برای همه جذاب نباشد. اگر فیلم‌های فکری دوست دارید، اینسپشن را ببینید!',
@@ -47,12 +44,9 @@ FALLBACK_MOVIE = {
 
 # --- توابع کمکی ---
 def clean_text(text):
-    """پاکسازی متن برای MarkdownV2"""
+    """پاکسازی متن بدون اسکیپ برای HTML"""
     if not text or text == 'N/A':
         return "متن موجود نیست"
-    # کاراکترهای خاص MarkdownV2
-    chars_to_escape = r'([_\[\]\(\)\~`>#\+-=|\{\}\.!])'
-    text = re.sub(chars_to_escape, r'\\\g<1>', text)
     return text[:300]
 
 def shorten_plot(text, max_sentences=3):
@@ -65,41 +59,27 @@ def is_farsi(text):
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
 
-async def translate_title_to_english(title):
-    """ترجمه عنوان فارسی به انگلیسی با TMDB"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=en-US"
-            async with session.get(search_url) as response:
-                data = await response.json()
-                if data.get('results'):
-                    return data['results'][0].get('title', title)
-                return title
-    except Exception as e:
-        logger.error(f"خطا در ترجمه عنوان {title}: {str(e)}")
-        return title
-
 async def get_movie_info(title):
-    """دریافت اطلاعات فیلم از TMDB و OMDB با فال‌بک"""
+    """دریافت اطلاعات فیلم فقط از TMDB"""
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
-            # TMDB برای خلاصه، تریلر، و اطلاعات اولیه
+            # جستجو در TMDB
             search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
             async with session.get(search_url) as tmdb_response:
                 tmdb_data = await tmdb_response.json()
                 if not tmdb_data.get('results'):
                     logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
-                    tmdb_plot = ""
-                    movie_id = None
-                    tmdb_title = title
-                    tmdb_year = 'N/A'
-                else:
-                    tmdb_plot = tmdb_data['results'][0].get('overview', '')
-                    movie_id = tmdb_data['results'][0].get('id')
-                    tmdb_title = tmdb_data['results'][0].get('title', title)
-                    tmdb_year = tmdb_data['results'][0].get('release_date', 'N/A')[:4]
+                    return None
                 
+                movie = tmdb_data['results'][0]
+                movie_id = movie.get('id')
+                tmdb_title = movie.get('title', title)
+                tmdb_year = movie.get('release_date', 'N/A')[:4]
+                tmdb_plot = movie.get('overview', '')
+                tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else 'N/A'
+                
+                # دریافت تریلر
                 trailer = "N/A"
                 if movie_id:
                     videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
@@ -111,91 +91,34 @@ async def get_movie_info(title):
                                     trailer = f"https://www.youtube.com/watch?v={video['key']}"
                                     break
             
-            # OMDB برای پوستر، امتیاز، و خلاصه فال‌بک
-            omdb_data = None
-            try:
-                # ترجمه عنوان به انگلیسی برای OMDB
-                omdb_title = await translate_title_to_english(title)
-                omdb_url = f"http://www.omdbapi.com/?t={omdb_title}&apikey={OMDB_API_KEY}"
-                async with session.get(omdb_url) as response:
-                    omdb_data = await response.json()
-                    if omdb_data.get('Response') != 'True':
-                        logger.error(f"OMDB پاسخ معتبر نداد برای {omdb_title}: {omdb_data.get('Error')}")
-                        omdb_data = None
-            except Exception as e:
-                logger.error(f"خطا در درخواست OMDB برای {title}: {str(e)}")
-                omdb_data = None
-            
             # انتخاب خلاصه داستان
-            plot = ""
-            if tmdb_plot and is_farsi(tmdb_plot):
-                plot = shorten_plot(tmdb_plot)
-                logger.info(f"خلاصه فارسی از TMDB برای {title}")
-            elif omdb_data and omdb_data.get('Plot') and is_farsi(omdb_data.get('Plot')):
-                plot = shorten_plot(omdb_data.get('Plot'))
-                logger.info(f"خلاصه فارسی از OMDB برای {title}")
-            else:
-                plot = "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
-                logger.info(f"فال‌بک خلاصه برای {title}")
+            plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
+            logger.info(f"خلاصه {'فارسی از TMDB' if tmdb_plot else 'فال‌بک'} برای {title}")
             
-            # اطلاعات نهایی
-            info = {
+            # دریافت امتیاز IMDB از جزئیات فیلم
+            details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=fa-IR"
+            async with session.get(details_url) as details_response:
+                details_data = await details_response.json()
+                imdb_score = str(details_data.get('vote_average', 'N/A'))
+                imdb = f"{imdb_score}/10" if imdb_score != 'N/A' else 'N/A'
+            
+            return {
                 'title': tmdb_title,
                 'year': tmdb_year,
                 'plot': plot,
-                'imdb': omdb_data.get('imdbRating', 'N/A') + '/10' if omdb_data and omdb_data.get('imdbRating') else 'N/A',
-                'rotten_tomatoes': next(
-                    (r['Value'] for r in omdb_data.get('Ratings', []) if omdb_data and r['Source'] == 'Rotten Tomatoes'),
-                    'N/A'
-                ),
+                'imdb': imdb,
+                'rotten_tomatoes': 'N/A',  # TMDB این اطلاعات رو نداره
                 'trailer': trailer,
-                'poster': omdb_data.get('Poster', 'N/A') if omdb_data and omdb_data.get('Poster') else 'N/A'
+                'poster': tmdb_poster
             }
-            return info
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات فیلم {title}: {str(e)}")
         return None
 
 async def generate_comment(title):
-    """تولید تحلیل با OpenAI یا فال‌بک پیش‌فرض"""
-    logger.info(f"تولید تحلیل برای فیلم: {title}")
-    try:
-        prompt = f"""
-        تحلیل حرفه‌ای و جذاب درباره فیلم {title} به زبان فارسی، دقیقاً 80-100 کلمه:
-        1. معرفی کوتاه فیلم و ژانر آن
-        2. نقاط قوت اصلی (مثل داستان، بازیگری، کارگردانی)
-        3. یک ضعف کوچک
-        4. توصیه برای تماشا
-        لحن سینمایی و حرفه‌ای باشد. از تکرار ایده‌های کلیشه‌ای پرهیز کن.
-        مثال: اینسپشن شاهکاری از نولان است که با داستان پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد...
-        """
-        
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY.strip()}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 200
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload
-            ) as response:
-                data = await response.json()
-                if 'choices' in data:
-                    return clean_text(data['choices'][0]['message']['content'])
-                logger.error(f"OpenAI پاسخ معتبر نداد: {data}")
-                return f"تحلیل موقت: {title} فیلمی جذاب با داستانی گیرا و بازیگری قوی است. کارگردانی حرفه‌ای آن شما را سرگرم می‌کند، هرچند ممکن است برخی صحنه‌ها کمی کند باشند. حتماً تماشا کنید!"
-    except Exception as e:
-        logger.error(f"خطا در تولید تحلیل برای {title}: {str(e)}")
-        return f"تحلیل موقت: {title} فیلمی جذاب با داستانی گیرا و بازیگری قوی است. کارگردانی حرفه‌ای آن شما را سرگرم می‌کند، هرچند ممکن است برخی صحنه‌ها کمی کند باشند. حتماً تماشا کنید!"
+    """تولید تحلیل پیش‌فرض بدون OpenAI"""
+    logger.info(f"تولید تحلیل پیش‌فرض برای فیلم: {title}")
+    return f"{title} فیلمی جذاب در ژانر ماجراجویی است که با داستانی گیرا و جلوه‌های بصری قوی، شما را سرگرم می‌کند. بازیگری و کارگردانی حرفه‌ای از نقاط قوت آن است، هرچند ممکن است برخی صحنه‌ها کمی قابل پیش‌بینی باشند. اگر به دنبال یک تجربه سینمایی هیجان‌انگیز هستید، این فیلم را از دست ندهید!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB"""
@@ -281,30 +204,30 @@ async def get_random_movie(max_retries=3):
     return FALLBACK_MOVIE
 
 def format_movie_post(movie):
-    """فرمت پست دقیقاً مثل نمونه درخواستی"""
+    """فرمت پست با تگ HTML مثل دیپ‌سیک"""
     stars = '⭐️' * movie['rating']
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
     
     return f"""
-🎬 **عنوان فیلم: {clean_text(movie['title'])}{special}**
+🎬 <b>عنوان فیلم: {clean_text(movie['title'])}{special}</b>
 
-📅 **سال تولید: {clean_text(movie['year'])}**
+📅 <b>سال تولید: {clean_text(movie['year'])}</b>
 
-📝 **خلاصه داستان:**
+📝 <b>خلاصه داستان:</b>
 {clean_text(movie['plot'])}
 
-🌟 **امتیاز:**
-**IMDB: {clean_text(movie['imdb'])}**
-**Rotten Tomatoes: {clean_text(movie['rotten_tomatoes'])}**
+🌟 <b>امتیاز:</b>
+<b>IMDB: {clean_text(movie['imdb'])}</b>
+<b>Rotten Tomatoes: {clean_text(movie['rotten_tomatoes'])}</b>
 
-🎞 **لینک تریلر:**
+🎞 <b>لینک تریلر:</b>
 {clean_text(movie['trailer'])}
 
-🍿 **حرف ما:**
+🍿 <b>حرف ما:</b>
 {clean_text(movie['comment'])}
 
-🎯 **ارزش دیدن: {stars}**
+🎯 <b>ارزش دیدن: {stars}</b>
 
 {channel_link}
 """
@@ -317,7 +240,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /fetchmovies - آپدیت لیست فیلم‌ها
 /postnow - ارسال پست فوری
 /testchannel - تست دسترسی به کانال
-/testapis - تست APIهای TMDB و OMDB
+/testapis - تست API TMDB
 /resetwebhook - ریست Webhook تلگرام
 """)
 
@@ -350,42 +273,20 @@ async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ خطا در دسترسی به کانال: {str(e)}")
 
 async def test_apis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تست APIهای TMDB و OMDB"""
+    """تست API TMDB"""
     if str(update.message.from_user.id) == ADMIN_ID:
-        msg = await update.message.reply_text("در حال تست APIها...")
+        msg = await update.message.reply_text("در حال تست API...")
         try:
             async with aiohttp.ClientSession() as session:
-                # TMDB
                 tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
                 async with session.get(tmdb_url) as tmdb_res:
                     tmdb_data = await tmdb_res.json()
                     tmdb_status = "✅ TMDB اوکی" if tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
                 
-                # OMDB
-                omdb_status = "❌ OMDB غیرفعال یا خطا"
-                try:
-                    omdb_url = f"http://www.omdbapi.com/?t=Inception&apikey={OMDB_API_KEY}"
-                    async with session.get(omdb_url) as omdb_res:
-                        omdb_data = await omdb_res.json()
-                        omdb_status = "✅ OMDB اوکی" if omdb_data.get('Response') == 'True' else f"❌ OMDB خطا: {omdb_data.get('Error')}"
-                except Exception as e:
-                    omdb_status = f"❌ OMDB خطا: {str(e)}"
-                
-                # OpenAI
-                openai_status = "❌ OpenAI غیرفعال یا خطا"
-                try:
-                    headers = {"Authorization": f"Bearer {OPENAI_API_KEY.strip()}", "Content-Type": "application/json"}
-                    payload = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "تست"}]}
-                    async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as openai_res:
-                        openai_data = await openai_res.json()
-                        openai_status = "✅ OpenAI اوکی" if 'choices' in openai_data else f"❌ OpenAI خطا: {openai_data.get('error', {}).get('message', 'خطای ناشناخته')}"
-                except Exception as e:
-                    openai_status = f"❌ OpenAI خطا: {str(e)}"
-                
-                await msg.edit_text(f"{tmdb_status}\n{omdb_status}\n{openai_status}")
+                await msg.edit_text(tmdb_status)
         except Exception as e:
-            logger.error(f"خطا در تست APIها: {e}")
-            await msg.edit_text(f"❌ خطا در تست APIها: {str(e)}")
+            logger.error(f"خطا در تست API: {e}")
+            await msg.edit_text(f"❌ خطا در تست API: {str(e)}")
 
 async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """آپدیت دستی کش فیلم‌ها"""
@@ -408,13 +309,13 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=CHANNEL_ID,
                         photo=movie['poster'],
                         caption=format_movie_post(movie),
-                        parse_mode='MarkdownV2'
+                        parse_mode='HTML'
                     )
                 else:
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
                         text=format_movie_post(movie),
-                        parse_mode='MarkdownV2'
+                        parse_mode='HTML'
                     )
                 await msg.edit_text(f"✅ پست {movie['title']} ارسال شد")
             except Exception as e:
@@ -435,13 +336,13 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
                     chat_id=CHANNEL_ID,
                     photo=movie['poster'],
                     caption=format_movie_post(movie),
-                    parse_mode='MarkdownV2'
+                    parse_mode='HTML'
                 )
             else:
                 await context.bot.send_message(
                     chat_id=CHANNEL_ID,
                     text=format_movie_post(movie),
-                    parse_mode='MarkdownV2'
+                    parse_mode='HTML'
                 )
             logger.info(f"پست خودکار برای {movie['title']} ارسال شد")
         except Exception as e:
