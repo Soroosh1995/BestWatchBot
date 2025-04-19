@@ -12,6 +12,7 @@ from aiohttp import web
 import re
 import urllib.parse
 from datetime import datetime, time, timedelta
+from google.api_core import exceptions as google_exceptions
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -31,12 +32,13 @@ PORT = int(os.getenv('PORT', 8080))
 # تنظیم Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- کش فیلم‌ها، پست‌شده‌ها و متن‌های قبلی ---
+# --- کش و متغیرهای سراسری ---
 cached_movies = []
 posted_movies = []
 last_fetch_time = None
 previous_plots = []
 previous_comments = []
+gemini_available = True  # وضعیت توکن Gemini
 
 # --- دیکشنری ترجمه ژانرها ---
 GENRE_TRANSLATIONS = {
@@ -106,7 +108,6 @@ async def get_movie_info(title):
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
-            # جستجو برای عنوان انگلیسی
             encoded_title = urllib.parse.quote(title)
             search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
             async with session.get(search_url_en) as tmdb_response_en:
@@ -119,14 +120,12 @@ async def get_movie_info(title):
                 tmdb_title = movie.get('title', title)
                 tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
             
-            # جستجو برای اطلاعات فارسی
             search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
             async with session.get(search_url_fa) as tmdb_response_fa:
                 tmdb_data_fa = await tmdb_response_fa.json()
                 tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
                 tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
             
-            # دریافت ژانرها و امتیاز
             details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
             async with session.get(details_url) as details_response:
                 details_data = await details_response.json()
@@ -140,7 +139,6 @@ async def get_movie_info(title):
                     genre_name = genre['name']
                     genres.append(GENRE_TRANSLATIONS.get(genre_name, genre_name))
             
-            # دریافت تریلر
             trailer = None
             if movie_id:
                 for lang in ['', '&language=en-US']:
@@ -155,7 +153,6 @@ async def get_movie_info(title):
                             if trailer:
                                 break
             
-            # انتخاب خلاصه داستان
             plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else None
             if not plot or not is_valid_plot(plot):
                 logger.info(f"خلاصه فارسی نامعتبر برای {title}: {plot}")
@@ -183,7 +180,12 @@ async def get_movie_info(title):
 
 async def generate_comment(_):
     """تولید تحلیل با Gemini API"""
+    global gemini_available
     logger.info("تولید تحلیل با Gemini")
+    if not gemini_available:
+        logger.warning("Gemini غیرفعال است (توکن تمام شده)")
+        return None
+    
     max_attempts = 2
     for attempt in range(max_attempts):
         try:
@@ -199,11 +201,38 @@ async def generate_comment(_):
                     previous_comments.pop(0)
                 return '. '.join(sentences[:3]) + '.'
             logger.warning(f"تحلیل Gemini نامعتبر (تلاش {attempt + 1}): {text}")
+        except google_exceptions.ResourceExhausted as e:
+            logger.error(f"خطا: توکن Gemini تمام شده است: {str(e)}")
+            gemini_available = False
+            await asyncio.get_event_loop().create_task(
+                send_admin_alert(None, "❌ توکن Gemini تمام شده است. لطفاً توکن جدید تنظیم کنید.")
+            )
+            return None
         except Exception as e:
             logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
         if attempt == max_attempts - 1:
             logger.warning("تلاش‌های Gemini تمام شد، استفاده از فال‌بک")
             return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
+    return None
+
+async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str):
+    """ارسال هشدار به ادمین"""
+    try:
+        if context:
+            await context.bot.send_message(ADMIN_ID, message)
+        else:
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": ADMIN_ID,
+                    "text": message
+                }
+                async with session.post(url, json=payload) as response:
+                    result = await response.json()
+                    if not result.get('ok'):
+                        logger.error(f"خطا در ارسال هشدار به ادمین: {result}")
+    except Exception as e:
+        logger.error(f"خطا در ارسال هشدار به ادمین: {str(e)}")
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB (100 فیلم)"""
@@ -255,7 +284,7 @@ async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
         logger.info("آپدیت خودکار کش موفق بود")
     else:
         logger.error("خطا در آپدیت خودکار کش")
-        await context.bot.send_message(ADMIN_ID, "❌ خطا در آپدیت خودکار کش")
+        await send_admin_alert(context, "❌ خطا در آپدیت خودکار کش")
 
 async def get_random_movie(max_retries=3):
     """انتخاب فیلم تصادفی با فیلترها"""
@@ -285,8 +314,11 @@ async def get_random_movie(max_retries=3):
             
             posted_movies.append(movie['id'])
             comment = await generate_comment(movie_info['title'])
-            imdb_score = float(movie_info['imdb'].split('/')[0])
+            if not comment and not gemini_available:
+                logger.error("تحلیل Gemini در دسترس نیست (توکن تمام شده)")
+                return None  # اگه توکن تموم شده، فیلم انتخاب نشه
             
+            imdb_score = float(movie_info['imdb'].split('/')[0])
             if imdb_score >= 9.0:
                 rating = 5
             elif 8.0 <= imdb_score < 9.0:
@@ -384,11 +416,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"دسترسی غیرمجاز توسط کاربر: {update.message.from_user.id}")
         return
     logger.info("دستور /start اجرا شد")
-    await update.message.reply_text("🤖 منوی ادمین:", reply_markup=get_main_menu())
+    version_info = "نسخه کد: 2025-04-18-v3 (با فیکس دکمه‌ها و هشدار Gemini)"
+    await update.message.reply_text(
+        f"🤖 منوی ادمین:\n{version_info}",
+        reply_markup=get_main_menu()
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """پردازش دکمه‌ها"""
+    logger.info("دریافت CallbackQuery")
     query = update.callback_query
+    if not query:
+        logger.error("CallbackQuery دریافت نشد")
+        return
     await query.answer()
     callback_data = query.data
     logger.info(f"دکمه زده شد: {callback_data}")
@@ -468,7 +508,6 @@ async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await query.message.edit_text("در حال تست سرویس‌ها...")
     results = []
     
-    # تست TMDB
     try:
         async with aiohttp.ClientSession() as session:
             tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
@@ -479,14 +518,12 @@ async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         results.append(f"❌ TMDB خطا: {str(e)}")
     
-    # تست JobQueue
     job_queue = context.job_queue
     results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
     
-    # تست Gemini
     try:
         comment = await generate_comment(None)
-        results.append("✅ Gemini اوکی" if comment else "❌ Gemini خطا")
+        results.append("✅ Gemini اوکی" if comment else f"❌ Gemini خطا: {'توکن تمام شده' if not gemini_available else 'مشکل ناشناخته'}")
     except Exception as e:
         results.append(f"❌ Gemini خطا: {str(e)}")
     
@@ -647,26 +684,34 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("شروع post_now")
     msg = await query.message.edit_text("در حال آماده‌سازی پست...")
     try:
+        if not gemini_available:
+            logger.error("ارسال پست کنسل شد: توکن Gemini تمام شده")
+            await msg.edit_text("❌ ارسال پست کنسل شد: توکن Gemini تمام شده", reply_markup=get_main_menu())
+            await send_admin_alert(context, "❌ توکن Gemini تمام شده است. لطفاً توکن جدید تنظیم کنید.")
+            return
+        
         movie = await get_random_movie()
-        if movie:
-            if movie['poster']:
-                await context.bot.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=movie['poster'],
-                    caption=format_movie_post(movie),
-                    parse_mode='HTML',
-                    disable_notification=True
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=format_movie_post(movie),
-                    parse_mode='HTML',
-                    disable_notification=True
-                )
-            await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
+        if not movie:
+            logger.error("هیچ فیلمی انتخاب نشد (احتمالاً به دلیل اتمام توکن Gemini)")
+            await msg.edit_text("❌ خطا در یافتن فیلم: توکن Gemini ممکن است تمام شده باشد", reply_markup=get_main_menu())
+            return
+        
+        if movie['poster']:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=movie['poster'],
+                caption=format_movie_post(movie),
+                parse_mode='HTML',
+                disable_notification=True
+            )
         else:
-            await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=format_movie_post(movie),
+                parse_mode='HTML',
+                disable_notification=True
+            )
+        await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"خطا در ارسال پست: {e}")
         await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
@@ -675,31 +720,37 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     """ارسال پست خودکار"""
     logger.info("شروع پست خودکار...")
     try:
+        if not gemini_available:
+            logger.error("پست خودکار کنسل شد: توکن Gemini تمام شده")
+            await send_admin_alert(context, "❌ پست خودکار کنسل شد: توکن Gemini تمام شده است.")
+            return
+        
         movie = await get_random_movie()
-        if movie:
-            logger.info(f"فیلم انتخاب شد: {movie['title']}")
-            if movie['poster']:
-                await context.bot.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=movie['poster'],
-                    caption=format_movie_post(movie),
-                    parse_mode='HTML',
-                    disable_notification=True
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=format_movie_post(movie),
-                    parse_mode='HTML',
-                    disable_notification=True
-                )
-            logger.info(f"پست خودکار برای {movie['title']} ارسال شد")
+        if not movie:
+            logger.error("هیچ فیلمی انتخاب نشد (احتمالاً به دلیل اتمام توکن Gemini)")
+            await send_admin_alert(context, "❌ خطا: فیلم برای پست خودکار یافت نشد (توکن Gemini ممکن است تمام شده باشد)")
+            return
+        
+        logger.info(f"فیلم انتخاب شد: {movie['title']}")
+        if movie['poster']:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=movie['poster'],
+                caption=format_movie_post(movie),
+                parse_mode='HTML',
+                disable_notification=True
+            )
         else:
-            logger.error("فیلم برای پست خودکار یافت نشد")
-            await context.bot.send_message(ADMIN_ID, "❌ خطا: فیلم برای پست خودکار یافت نشد")
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=format_movie_post(movie),
+                parse_mode='HTML',
+                disable_notification=True
+            )
+        logger.info(f"پست خودکار برای {movie['title']} ارسال شد")
     except Exception as e:
         logger.error(f"خطا در ارسال پست خودکار: {e}")
-        await context.bot.send_message(ADMIN_ID, f"❌ خطای پست خودکار: {str(e)}")
+        await send_admin_alert(context, f"❌ خطای پست خودکار: {str(e)}")
 
 async def health_check(request):
     """چک سلامت سرور"""
@@ -720,7 +771,6 @@ async def run_bot():
     app.add_handler(CommandHandler("resetwebhook", reset_webhook))
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # ConversationHandler برای add_movie
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_movie_start, pattern='^add_movie$')],
         states={
@@ -733,18 +783,17 @@ async def run_bot():
     job_queue = app.job_queue
     if job_queue:
         logger.info("JobQueue فعال شد")
-        # زمان‌بندی موقت: هر 10 دقیقه برای تست
-        # TODO: بعداً به 7200 (2 ساعت) برگردانید
         job_queue.run_repeating(auto_post, interval=600, first=10)
         job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)
     else:
         logger.error("JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
-        await app.bot.send_message(ADMIN_ID, "⚠️ هشدار: JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
+        await send_admin_alert(None, "⚠️ هشدار: JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
         asyncio.create_task(fallback_scheduler(app.context))
     
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
+    logger.info("بات تلگرام با موفقیت راه‌اندازی شد")
     return app
 
 async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
@@ -752,7 +801,7 @@ async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
     logger.info("اجرای زمان‌بندی جایگزین...")
     while True:
         await auto_post(context)
-        await asyncio.sleep(600)  # هر 10 دقیقه برای تست
+        await asyncio.sleep(600)
         if (datetime.now() - last_fetch_time).seconds > 86400:
             await auto_fetch_movies(context)
 
@@ -774,7 +823,6 @@ async def main():
     if not await fetch_movies_to_cache():
         logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
     
-    # ریست Webhook در شروع
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -786,11 +834,9 @@ async def main():
     except Exception as e:
         logger.error(f"خطا در ریست Webhook اولیه: {e}")
     
-    # راه‌اندازی بات و سرور وب
     bot_app = await run_bot()
     web_runner = await run_web()
     
-    # نگه‌داشتن برنامه در حال اجرا
     try:
         while True:
             await asyncio.sleep(3600)
