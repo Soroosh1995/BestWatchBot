@@ -5,11 +5,12 @@ import logging
 import aiohttp
 import random
 import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from dotenv import load_dotenv
 from aiohttp import web
 import re
+import urllib.parse
 from datetime import datetime, time, timedelta
 
 # --- تنظیمات اولیه ---
@@ -30,10 +31,12 @@ PORT = int(os.getenv('PORT', 8080))
 # تنظیم Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- کش فیلم‌ها و لیست پست‌شده‌ها ---
+# --- کش فیلم‌ها، پست‌شده‌ها و متن‌های قبلی ---
 cached_movies = []
 posted_movies = []
 last_fetch_time = None
+previous_plots = []
+previous_comments = []
 
 # --- دیکشنری ترجمه ژانرها ---
 GENRE_TRANSLATIONS = {
@@ -79,8 +82,8 @@ def clean_text(text):
     return text[:300]
 
 def shorten_plot(text, max_sentences=3):
-    """کوتاه کردن خلاصه داستان به 2-3 جمله بدون محدودیت طول"""
-    sentences = text.split('. ')
+    """کوتاه کردن خلاصه داستان به 2-3 جمله کامل"""
+    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
     return '. '.join(sentences[:max_sentences]) + ('.' if sentences else '')
 
 def is_farsi(text):
@@ -88,13 +91,21 @@ def is_farsi(text):
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
 
+def is_valid_plot(text):
+    """چک کردن معتبر بودن خلاصه داستان"""
+    if not text or len(text.split()) < 10 or text in previous_plots:
+        return False
+    sentences = text.split('. ')
+    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 2
+
 async def get_movie_info(title):
     """دریافت اطلاعات فیلم از TMDB با فیلترهای دقیق"""
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
             # جستجو برای عنوان انگلیسی
-            search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=en-US"
+            encoded_title = urllib.parse.quote(title)
+            search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
             async with session.get(search_url_en) as tmdb_response_en:
                 tmdb_data_en = await tmdb_response_en.json()
                 if not tmdb_data_en.get('results'):
@@ -106,7 +117,7 @@ async def get_movie_info(title):
                 tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
             
             # جستجو برای اطلاعات فارسی
-            search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
+            search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
             async with session.get(search_url_fa) as tmdb_response_fa:
                 tmdb_data_fa = await tmdb_response_fa.json()
                 tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
@@ -142,8 +153,21 @@ async def get_movie_info(title):
                                 break
             
             # انتخاب خلاصه داستان
-            plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
-            logger.info(f"خلاصه {'فارسی از TMDB' if tmdb_plot else 'فال‌بک'} برای {title}")
+            plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else None
+            if not plot or not is_valid_plot(plot):
+                # فال‌بک به خلاصه انگلیسی یا متن پیش‌فرض
+                details_url_en = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
+                async with session.get(details_url_en) as details_response_en:
+                    details_data_en = await details_response_en.json()
+                    plot_en = details_data_en.get('overview', '')
+                    plot = shorten_plot(plot_en) if plot_en else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
+                logger.info(f"خلاصه {'انگلیسی' if plot_en else 'فال‌بک'} برای {title}")
+            else:
+                logger.info(f"خلاصه فارسی از TMDB برای {title}")
+            
+            previous_plots.append(plot)
+            if len(previous_plots) > 10:
+                previous_plots.pop(0)
             
             return {
                 'title': tmdb_title,
@@ -161,18 +185,26 @@ async def get_movie_info(title):
 async def generate_comment(_):
     """تولید تحلیل با Gemini API"""
     logger.info("تولید تحلیل با Gemini")
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، حداکثر 3 جمله، با لحن حرفه‌ای و سینمایی."
-        response = await model.generate_content_async(prompt)
-        text = response.text.strip()
-        if not text or not is_farsi(text):
-            logger.warning("تحلیل Gemini نامعتبر، استفاده از فال‌بک")
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
+            response = await model.generate_content_async(prompt)
+            text = response.text.strip()
+            sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+            if (len(sentences) >= 3 and is_farsi(text) and
+                text not in previous_comments and len(text.split()) > 15):
+                previous_comments.append(text)
+                if len(previous_comments) > 10:
+                    previous_comments.pop(0)
+                return '. '.join(sentences[:3]) + '.'
+            logger.warning(f"تحلیل Gemini نامعتبر (تلاش {attempt + 1}): {text}")
+        except Exception as e:
+            logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
+        if attempt == max_attempts - 1:
+            logger.warning("تلاش‌های Gemini تمام شد، استفاده از فال‌بک")
             return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
-        return text
-    except Exception as e:
-        logger.error(f"خطا در Gemini API: {str(e)}")
-        return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB (100 فیلم)"""
@@ -324,7 +356,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤖 دستورات ادمین:
 /fetchmovies - آپدیت لیست فیلم‌ها
 /postnow - ارسال پست فوری
-/test - تست TMDB، کانال و JobQueue
+/test - تست TMDB، JobQueue و Gemini
+/testchannel - تست دسترسی به کانال
 /resetwebhook - ریست Webhook تلگرام
 /addmovie <نام فیلم> - اضافه کردن فیلم به لیست
 /stats - بررسی بازدید کانال
@@ -348,8 +381,19 @@ async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"خطا در ریست Webhook: {e}")
             await update.message.reply_text(f"❌ خطا در ریست Webhook: {str(e)}")
 
+async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تست دسترسی به کانال"""
+    if str(update.message.from_user.id) != ADMIN_ID:
+        return
+    try:
+        await context.bot.send_message(CHANNEL_ID, "تست دسترسی بات")
+        await update.message.reply_text("✅ دسترسی به کانال اوکی")
+    except Exception as e:
+        logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
+        await update.message.reply_text(f"❌ خطا در تست دسترسی به کانال: {str(e)}")
+
 async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تست همه سرویس‌ها"""
+    """تست سرویس‌های TMDB، JobQueue و Gemini"""
     if str(update.message.from_user.id) != ADMIN_ID:
         return
     msg = await update.message.reply_text("در حال تست سرویس‌ها...")
@@ -365,13 +409,6 @@ async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results.append(tmdb_status)
     except Exception as e:
         results.append(f"❌ TMDB خطا: {str(e)}")
-    
-    # تست کانال
-    try:
-        await context.bot.send_message(CHANNEL_ID, "تست دسترسی بات")
-        results.append("✅ دسترسی به کانال اوکی")
-    except Exception as e:
-        results.append(f"❌ دسترسی به کانال خطا: {str(e)}")
     
     # تست JobQueue
     job_queue = context.job_queue
@@ -404,7 +441,8 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         async with aiohttp.ClientSession() as session:
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
+            encoded_title = urllib.parse.quote(title)
+            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
             async with session.get(search_url) as response:
                 data = await response.json()
                 logger.info(f"پاسخ TMDB برای {title}: {data}")
@@ -421,7 +459,7 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 movie_id = movie['id']
                 if movie_id in [m['id'] for m in cached_movies]:
-                    await msg.edit_text(f"❌ فیلم {title} قبلاً در لیست است")
+                    await msg.edit_text(f"❌ فیلم {title} در لیست موجود است")
                     return
                 
                 cached_movies.append({'title': movie['title'], 'id': movie_id})
@@ -431,7 +469,7 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ خطا در اضافه کردن فیلم: {str(e)}")
 
 async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بررسی بازدید کانال با API خام تلگرام"""
+    """بررسی بازدید کانال"""
     if str(update.message.from_user.id) != ADMIN_ID:
         return
     msg = await update.message.reply_text("در حال بررسی بازدید کانال...")
@@ -442,13 +480,19 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         views_week = []
         views_month = []
         
-        # استفاده از getUpdates برای گرفتن پیام‌های کانال
         async with aiohttp.ClientSession() as session:
+            # تست دسترسی به پیام‌های کانال
+            logger.info(f"چک دسترسی به کانال {CHANNEL_ID}")
+            test_message = await context.bot.send_message(CHANNEL_ID, "تست دسترسی برای آمار")
+            await context.bot.delete_message(CHANNEL_ID, test_message.message_id)
+            
+            # گرفتن پیام‌های اخیر
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-100"
             async with session.get(url) as response:
                 data = await response.json()
+                logger.info(f"پاسخ getUpdates: {data}")
                 if not data.get('ok') or not data.get('result'):
-                    raise Exception("هیچ پیامی دریافت نشد")
+                    raise Exception("هیچ پیامی دریافت نشد. مطمئن شوید بات ادمین کانال است و پیام‌های اخیر دارد.")
                 
                 for update in data['result']:
                     if 'channel_post' in update:
@@ -465,6 +509,9 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             views_week.append(post['views'])
                         if time_diff <= timedelta(days=30):
                             views_month.append(post['views'])
+        
+        if not views_24h and not views_week and not views_month:
+            raise Exception("هیچ بازدیدی ثبت نشد. احتمالاً کانال پیام اخیر ندارد یا بات دسترسی لازم را ندارد.")
         
         avg_24h = sum(views_24h) / len(views_24h) if views_24h else 0
         avg_week = sum(views_week) / len(views_week) if views_week else 0
@@ -483,12 +530,26 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """آپدیت دستی کش فیلم‌ها"""
-    if str(update.message.from_user.id) == ADMIN_ID:
-        msg = await update.message.reply_text("در حال آپدیت لیست...")
-        if await fetch_movies_to_cache():
-            await msg.edit_text(f"✅ لیست آپدیت شد! ({len(cached_movies)} فیلم)")
-        else:
-            await msg.edit_text("❌ خطا در آپدیت لیست")
+    if str(update.message.from_user.id) != ADMIN_ID:
+        return
+    msg = await update.message.reply_text("در حال آپدیت لیست...")
+    if await fetch_movies_to_cache():
+        keyboard = [[InlineKeyboardButton("لیست فیلم‌ها", callback_data='show_movies')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await msg.edit_text(f"✅ لیست آپدیت شد! ({len(cached_movies)} فیلم)", reply_markup=reply_markup)
+    else:
+        await msg.edit_text("❌ خطا در آپدیت لیست")
+
+async def show_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش لیست فیلم‌های کش‌شده"""
+    query = update.callback_query
+    await query.answer()
+    if not cached_movies:
+        await query.message.reply_text("❌ لیست فیلم‌ها خالی است")
+        return
+    
+    movies_list = "\n".join([f"{i+1}. {m['title']} (ID: {m['id']})" for i, m in enumerate(cached_movies)])
+    await query.message.reply_text(f"📋 لیست فیلم‌ها:\n{movies_list}")
 
 async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ارسال پست دستی"""
@@ -545,15 +606,6 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
         logger.error("فیلم برای پست خودکار یافت نشد")
         await context.bot.send_message(ADMIN_ID, "❌ خطا: فیلم برای پست خودکار یافت نشد")
 
-async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
-    """زمان‌بندی جایگزین برای پست و آپدیت کش"""
-    logger.info("اجرای زمان‌بندی جایگزین...")
-    while True:
-        await auto_post(context)
-        await asyncio.sleep(7200)  # هر 2 ساعت
-        if (datetime.now() - last_fetch_time).seconds > 86400:
-            await auto_fetch_movies(context)
-
 async def health_check(request):
     """چک سلامت سرور"""
     return web.Response(text="OK")
@@ -572,9 +624,11 @@ async def run_bot():
     app.add_handler(CommandHandler("fetchmovies", fetch_movies))
     app.add_handler(CommandHandler("postnow", post_now))
     app.add_handler(CommandHandler("test", test_all))
+    app.add_handler(CommandHandler("testchannel", test_channel))
     app.add_handler(CommandHandler("resetwebhook", reset_webhook))
     app.add_handler(CommandHandler("addmovie", add_movie))
     app.add_handler(CommandHandler("stats", get_channel_stats))
+    app.add_handler(CallbackQueryHandler(show_movies, pattern='show_movies'))
     
     job_queue = app.job_queue
     if job_queue:
@@ -584,13 +638,21 @@ async def run_bot():
     else:
         logger.error("JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
         await app.bot.send_message(ADMIN_ID, "⚠️ هشدار: JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
-        # راه‌اندازی زمان‌بندی جایگزین
         asyncio.create_task(fallback_scheduler(app.context))
     
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     return app
+
+async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
+    """زمان‌بندی جایگزین برای پست و آپدیت کش"""
+    logger.info("اجرای زمان‌بندی جایگزین...")
+    while True:
+        await auto_post(context)
+        await asyncio.sleep(7200)  # هر 2 ساعت
+        if (datetime.now() - last_fetch_time).seconds > 86400:
+            await auto_fetch_movies(context)
 
 async def run_web():
     """راه‌اندازی سرور وب برای Render"""
