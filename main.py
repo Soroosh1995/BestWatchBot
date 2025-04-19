@@ -39,7 +39,7 @@ PORT = int(os.getenv('PORT', 8080))
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # تنظیم Open AI
-client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=aiohttp.ClientSession(verify_ssl=certifi.where()))
+client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=aiohttp.ClientSession())
 
 # --- کش و متغیرهای سراسری ---
 cached_movies = []
@@ -148,12 +148,16 @@ def get_fallback_by_genre(options, genres):
 
 async def get_imdb_score_rapidapi(title, retries=5):
     logger.info(f"دریافت امتیاز RapidAPI برای: {title}")
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "imdb236.p.rapidapi.com"
+    }
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
                 encoded_title = urllib.parse.quote(title)
-                url = f"https://imdb-api.com/en/API/SearchMovie/{RAPIDAPI_KEY}/{encoded_title}"
-                async with session.get(url) as response:
+                url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
+                async with session.get(url, headers=headers) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit برای RapidAPI، تلاش {attempt + 1}")
                         await asyncio.sleep(3)
@@ -243,9 +247,13 @@ async def get_movie_info(title):
                 logger.info(f"تلاش با RapidAPI برای {title}")
                 rapidapi_score = await get_imdb_score_rapidapi(title)
                 if rapidapi_score:
+                    headers = {
+                        "x-rapidapi-key": RAPIDAPI_KEY,
+                        "x-rapidapi-host": "imdb236.p.rapidapi.com"
+                    }
                     encoded_title = urllib.parse.quote(title)
-                    rapidapi_url = f"https://imdb-api.com/en/API/SearchMovie/{RAPIDAPI_KEY}/{encoded_title}"
-                    async with session.get(rapidapi_url) as rapidapi_response:
+                    rapidapi_url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
+                    async with session.get(rapidapi_url, headers=headers) as rapidapi_response:
                         rapidapi_data = await rapidapi_response.json()
                         logger.info(f"پاسخ RapidAPI برای {title}: {rapidapi_data}")
                         if rapidapi_data.get('results'):
@@ -389,7 +397,7 @@ async def generate_comment(genres):
                     ],
                     max_tokens=150,
                     temperature=0.7,
-                    timeout=20
+                    timeout=30
                 )
                 text = response.choices[0].message.content.strip()
                 sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -482,8 +490,12 @@ async def fetch_movies_to_cache():
 
                     # 3. RapidAPI
                     logger.info(f"تلاش با RapidAPI برای کش، صفحه {page}")
-                    rapidapi_url = f"https://imdb-api.com/en/API/MostPopularMovies/{RAPIDAPI_KEY}"
-                    async with session.get(rapidapi_url) as rapidapi_response:
+                    headers = {
+                        "x-rapidapi-key": RAPIDAPI_KEY,
+                        "x-rapidapi-host": "imdb236.p.rapidapi.com"
+                    }
+                    rapidapi_url = f"https://imdb236.p.rapidapi.com/v1/MostPopularMovies"
+                    async with session.get(rapidapi_url, headers=headers) as rapidapi_response:
                         if rapidapi_response.status == 429:
                             logger.warning(f"خطای 429: Rate Limit برای RapidAPI، تلاش {attempt + 1}")
                             await asyncio.sleep(3)
@@ -771,8 +783,12 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for attempt in range(5):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
-                url = f"https://imdb-api.com/en/API/SearchMovie/{RAPIDAPI_KEY}/test"
-                async with session.get(url) as response:
+                headers = {
+                    "x-rapidapi-key": RAPIDAPI_KEY,
+                    "x-rapidapi-host": "imdb236.p.rapidapi.com"
+                }
+                url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/test"
+                async with session.get(url, headers=headers) as response:
                     data = await response.json()
                     rapidapi_status = "✅ RapidAPI اوکی" if data.get('results') or data.get('errorMessage') else f"❌ RapidAPI خطا: {data}"
                     results.append(rapidapi_status)
@@ -836,7 +852,7 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ],
                 max_tokens=50,
                 temperature=0.7,
-                timeout=20
+                timeout=30
             )
             text = response.choices[0].message.content.strip()
             openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
