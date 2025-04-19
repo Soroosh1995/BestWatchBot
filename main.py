@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 import aiohttp.client_exceptions
 import re
 import certifi
+import json
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -34,6 +35,8 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
+POST_INTERVAL = int(os.getenv('POST_INTERVAL', 600))
+FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 86400))
 
 # تنظیم Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -50,6 +53,8 @@ previous_comments = []
 gemini_available = True
 openai_available = True
 bot_enabled = True
+CACHE_FILE = "movie_cache.json"
+POSTED_MOVIES_FILE = "posted_movies.json"
 
 # --- دیکشنری ترجمه ژانرها ---
 GENRE_TRANSLATIONS = {
@@ -70,37 +75,52 @@ GENRE_TRANSLATIONS = {
     'Science Fiction': 'علمی_تخیلی',
     'Thriller': 'هیجان_انگیز',
     'War': 'جنگی',
-    'Western': 'وسترن'
+    'Western': 'وسترن',
+    'Unknown': 'سایر'
 }
 
 # --- فال‌بک‌ها ---
 FALLBACK_PLOTS = {
     'اکشن': [
         "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟",
+        "داستانی پر از تعقیب و گریز و انفجارهای مهیج. قهرمانی که برای عدالت می‌جنگد. آیا او پیروز خواهد شد؟",
     ],
     'درام': [
         "داستانی عمیق از روابط انسانی و انتخاب‌های سخت. زندگی شخصیتی پیچیده که قلب شما را لمس می‌کند. آیا او راه خود را پیدا خواهد کرد؟",
+        "روایتی احساسی از چالش‌های زندگی و عشق. تصمیم‌هایی که آینده را تغییر می‌دهند. آیا پایان خوشی در انتظار است؟",
     ],
     'کمدی': [
         "ماجراهای خنده‌داری که زندگی را زیرورو می‌کنند. گروهی از دوستان که در موقعیت‌های عجیب گیر می‌افتند. آیا از این مخمصه خلاص می‌شوند؟",
+        "داستانی پر از شوخی و موقعیت‌های بامزه. شخصیت‌هایی که شما را به خنده می‌اندازند. آیا همه‌چیز به خیر می‌گذرد؟",
     ],
     'علمی_تخیلی': [
         "جهانی در آینده که تکنولوژی همه‌چیز را تغییر داده. ماجراجویی‌ای برای کشف حقیقت پشت یک راز بزرگ. آیا بشریت نجات پیدا می‌کند؟",
+        "داستانی از سفر در زمان و فضا. اکتشافاتی که جهان را دگرگون می‌کنند. آیا حقیقت آشکار خواهد شد؟",
+    ],
+    'سایر': [
+        "داستانی جذاب که شما را به سفری غیرمنتظره می‌برد. شخصیت‌هایی که با چالش‌های بزرگ روبرو می‌شوند. آیا پایان خوشی در انتظار است؟",
     ]
 }
 
 FALLBACK_COMMENTS = {
     'اکشن': [
         "این فیلم با صحنه‌های اکشن نفس‌گیر و داستان پرهیجان، شما را به صندلی میخکوب می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده از نقاط قوت آن است. فقط گاهی ریتم تند ممکن است کمی گیج‌کننده باشد.",
+        "فیلمی پر از هیجان و صحنه‌های اکشن تماشایی. داستان سرگرم‌کننده و بازیگری قوی، آن را جذاب کرده است. فقط برخی لحظات ممکن است قابل پیش‌بینی باشند.",
     ],
     'درام': [
         "این فیلم با داستانی عمیق و احساسی، قلب شما را تسخیر می‌کند. بازیگری بی‌نقص و کارگردانی حساس، آن را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
+        "روایتی تکان‌دهنده از زندگی و احساسات انسانی. فیلم‌برداری زیبا و موسیقی متن تأثیرگذار، آن را خاص کرده‌اند. فقط پایان ممکن است برای همه رضایت‌بخش نباشد.",
     ],
     'کمدی': [
         "این فیلم با شوخی‌های بامزه و داستان سرگرم‌کننده، شما را به خنده می‌اندازد. بازیگران شیمی فوق‌العاده‌ای دارند و کارگردانی پرانرژی است. فقط برخی جوک‌ها ممکن است تکراری به نظر برسند.",
+        "داستانی سبک و خنده‌دار که حال شما را خوب می‌کند. شخصیت‌پردازی قوی و دیالوگ‌های هوشمندانه از نقاط قوت آن است. فقط ریتم در برخی صحنه‌ها افت می‌کند.",
     ],
     'علمی_تخیلی': [
         "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به دنیایی دیگر می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی از نقاط قوت آن است. فقط برخی مفاهیم ممکن است پیچیده باشند.",
+        "جهانی فانتزی که با داستان‌سرایی قوی شما را مجذوب می‌کند. تکنولوژی‌های تخیلی و کارگردانی خلاقانه، آن را دیدنی کرده‌اند. فقط برخی جزئیات ممکن است گنگ باشند.",
+    ],
+    'سایر': [
+        "فیلمی که با داستان‌سرایی جذاب و کارگردانی قوی، شما را سرگرم می‌کند. بازیگری خوب و روایت روان از نقاط قوت آن است. فقط برخی لحظات ممکن است کند باشند.",
     ]
 }
 
@@ -115,6 +135,13 @@ FALLBACK_MOVIE = {
     'rating': 4,
     'special': True,
     'genres': ['علمی_تخیلی', 'هیجان_انگیز']
+}
+
+# --- شمارشگر خطاهای API ---
+api_errors = {
+    'rapidapi': 0,
+    'tmdb': 0,
+    'omdb': 0
 }
 
 # --- توابع کمکی ---
@@ -144,221 +171,255 @@ def get_fallback_by_genre(options, genres):
             if available:
                 return random.choice(available)
     available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
-    return random.choice(available) if available else options[list(options.keys())[0]][0]
+    return random.choice(available) if available else options['سایر'][0]
 
-async def get_imdb_score_rapidapi(title, retries=5):
+async def make_api_request(url, headers=None, retries=5, timeout=15):
+    for attempt in range(retries):
+        try:
+            async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 429:
+                        logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
+                        await asyncio.sleep(3)
+                        continue
+                    if response.status == 401:
+                        logger.error(f"خطای 401: کلید API نامعتبر")
+                        return None
+                    if response.status != 200:
+                        logger.error(f"خطای {response.status}: {await response.text()}")
+                        return None
+                    data = await response.json()
+                    return data
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(3)
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"خطای پاسخ (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"خطای غیرمنتظره در درخواست API (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(3)
+    return None
+
+async def get_imdb_score_rapidapi(title):
     logger.info(f"دریافت امتیاز RapidAPI برای: {title}")
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "imdb236.p.rapidapi.com"
     }
-    for attempt in range(retries):
-        try:
-            async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
-                encoded_title = urllib.parse.quote(title)
-                url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 429:
-                        logger.warning(f"خطای 429: Rate Limit برای RapidAPI، تلاش {attempt + 1}")
-                        await asyncio.sleep(3)
-                        continue
-                    if response.status == 401:
-                        logger.error(f"خطای 401: کلید RapidAPI نامعتبر")
-                        return None
-                    data = await response.json()
-                    logger.info(f"پاسخ RapidAPI برای {title}: {data}")
-                    if not data.get('results'):
-                        logger.warning(f"RapidAPI هیچ نتیجه‌ای برای {title} نداد")
-                        return None
-                    movie = data['results'][0]
-                    imdb_score = movie.get('imDbRating', '0')
-                    if float(imdb_score) < 6.0:
-                        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
-                        return None
-                    return f"{float(imdb_score):.1f}/10"
-        except aiohttp.client_exceptions.ClientConnectorError as e:
-            logger.error(f"خطای اتصال RapidAPI برای {title} (تلاش {attempt + 1}): {str(e)}")
-            if attempt == retries - 1:
-                logger.error("تلاش‌های RapidAPI تمام شد")
-                return None
-            await asyncio.sleep(3)
-        except Exception as e:
-            logger.error(f"خطا در RapidAPI برای {title} (تلاش {attempt + 1}): {str(e)}")
-            if attempt == retries - 1:
-                return None
-            await asyncio.sleep(3)
-    return None
+    encoded_title = urllib.parse.quote(title)
+    url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
+    data = await make_api_request(url, headers=headers)
+    if not data or not data.get('results'):
+        logger.warning(f"RapidAPI هیچ نتیجه‌ای برای {title} نداد")
+        api_errors['rapidapi'] += 1
+        return None
+    movie = data['results'][0]
+    imdb_score = movie.get('imDbRating', '0')
+    if float(imdb_score) < 6.0:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+        return None
+    api_errors['rapidapi'] = 0  # ریست خطاها در صورت موفقیت
+    return f"{float(imdb_score):.1f}/10"
 
 async def get_imdb_score_tmdb(title):
     logger.info(f"دریافت اطلاعات TMDB برای: {title}")
-    try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
-            encoded_title = urllib.parse.quote(title)
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-            async with session.get(search_url) as response:
-                if response.status == 429:
-                    logger.warning(f"خطای 429: Rate Limit برای TMDB")
-                    return None
-                data = await response.json()
-                logger.info(f"پاسخ TMDB برای {title}: {data}")
-                if not data.get('results'):
-                    logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
-                    return None
-                movie = data['results'][0]
-                imdb_score = movie.get('vote_average', 0)
-                if imdb_score < 6.0:
-                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
-                    return None
-                return f"{float(imdb_score):.1f}/10"
-    except Exception as e:
-        logger.error(f"خطا در TMDB برای {title}: {str(e)}")
+    encoded_title = urllib.parse.quote(title)
+    url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
+    data = await make_api_request(url)
+    if not data or not data.get('results'):
+        logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
+        api_errors['tmdb'] += 1
         return None
+    movie = data['results'][0]
+    imdb_score = movie.get('vote_average', 0)
+    if imdb_score < 6.0:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+        return None
+    api_errors['tmdb'] = 0
+    return f"{float(imdb_score):.1f}/10"
 
 async def get_imdb_score_omdb(title):
     logger.info(f"دریافت اطلاعات OMDb برای: {title}")
-    try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
-            encoded_title = urllib.parse.quote(title)
-            url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-            async with session.get(url) as response:
-                if response.status == 429:
-                    logger.warning(f"خطای 429: Rate Limit برای OMDb")
-                    return None
-                data = await response.json()
-                logger.info(f"پاسخ OMDb برای {title}: {data}")
-                if data.get('Response') == 'False':
-                    logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
-                    return None
-                imdb_score = data.get('imdbRating', '0')
-                if float(imdb_score) < 6.0:
-                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
-                    return None
-                return f"{float(imdb_score):.1f}/10"
-    except Exception as e:
-        logger.error(f"خطا در OMDb برای {title}: {str(e)}")
+    encoded_title = urllib.parse.quote(title)
+    url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
+    data = await make_api_request(url)
+    if not data or data.get('Response') == 'False':
+        logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
+        api_errors['omdb'] += 1
         return None
+    imdb_score = data.get('imdbRating', '0')
+    if float(imdb_score) < 6.0:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+        return None
+    api_errors['omdb'] = 0
+    return f"{float(imdb_score):.1f}/10"
+
+async def check_poster(url):
+    try:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=5)) as session:
+            async with session.head(url) as response:
+                if response.status != 200:
+                    return False
+                content_length = response.headers.get('Content-Length')
+                if content_length and int(content_length) > 5 * 1024 * 1024:  # 5MB
+                    logger.warning(f"پوستر {url} بیش از حد بزرگ است")
+                    return False
+                return True
+    except Exception as e:
+        logger.error(f"خطا در چک پوستر {url}: {str(e)}")
+        return False
+
+async def save_cache_to_file():
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cached_movies, f, ensure_ascii=False)
+        logger.info("کش به فایل ذخیره شد")
+    except Exception as e:
+        logger.error(f"خطا در ذخیره کش به فایل: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در ذخیره کش: {str(e)}")
+
+async def load_cache_from_file():
+    global cached_movies
+    try:
+        if os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cached_movies = json.load(f)
+            logger.info(f"کش از فایل لود شد: {len(cached_movies)} فیلم")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"خطا در لود کش از فایل: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در لود کش: {str(e)}")
+        return False
+
+async def save_posted_movies_to_file():
+    try:
+        with open(POSTED_MOVIES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(posted_movies, f, ensure_ascii=False)
+        logger.info("لیست فیلم‌های ارسال‌شده ذخیره شد")
+    except Exception as e:
+        logger.error(f"خطا در ذخیره فیلم‌های ارسال‌شده: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در ذخیره فیلم‌های ارسال‌شده: {str(e)}")
+
+async def load_posted_movies_from_file():
+    global posted_movies
+    try:
+        if os.path.exists(POSTED_MOVIES_FILE):
+            with open(POSTED_MOVIES_FILE, 'r', encoding='utf-8') as f:
+                posted_movies = json.load(f)
+            logger.info(f"لیست فیلم‌های ارسال‌شده لود شد: {len(posted_movies)} فیلم")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"خطا در لود فیلم‌های ارسال‌شده: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در لود فیلم‌های ارسال‌شده: {str(e)}")
+        return False
 
 async def get_movie_info(title):
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
-                # 1. RapidAPI
-                logger.info(f"تلاش با RapidAPI برای {title}")
-                rapidapi_score = await get_imdb_score_rapidapi(title)
-                if rapidapi_score:
-                    headers = {
-                        "x-rapidapi-key": RAPIDAPI_KEY,
-                        "x-rapidapi-host": "imdb236.p.rapidapi.com"
-                    }
-                    encoded_title = urllib.parse.quote(title)
-                    rapidapi_url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
-                    async with session.get(rapidapi_url, headers=headers) as rapidapi_response:
-                        rapidapi_data = await rapidapi_response.json()
-                        logger.info(f"پاسخ RapidAPI برای {title}: {rapidapi_data}")
-                        if rapidapi_data.get('results'):
-                            movie = rapidapi_data['results'][0]
-                            genres = movie.get('genres', '').split(', ')
-                            genres = [GENRE_TRANSLATIONS.get(g, g) for g in genres]
-                            return {
-                                'title': movie.get('title', title),
-                                'year': movie.get('description', '')[:4],
-                                'plot': get_fallback_by_genre(FALLBACK_PLOTS, genres),
-                                'imdb': rapidapi_score,
-                                'trailer': None,
-                                'poster': movie.get('image', None),
-                                'genres': genres[:3]
-                            }
-
-                # 2. TMDB
-                logger.info(f"تلاش با TMDB برای {title}")
-                search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-                async with session.get(search_url_en) as tmdb_response_en:
-                    if tmdb_response_en.status == 429:
-                        logger.warning(f"خطای 429: Rate Limit برای TMDB، تلاش {attempt + 1}")
-                        await asyncio.sleep(3)
-                        continue
-                    tmdb_data_en = await tmdb_response_en.json()
-                    logger.info(f"پاسخ TMDB (انگلیسی) برای {title}: {tmdb_data_en}")
-                    if tmdb_data_en.get('results'):
-                        movie = tmdb_data_en['results'][0]
-                        movie_id = movie.get('id')
-                        tmdb_title = movie.get('title', title)
-                        tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
-                        
-                        details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
-                        async with session.get(details_url) as details_response:
-                            details_data = await details_response.json()
-                            genres = [GENRE_TRANSLATIONS.get(g['name'], g['name']) for g in details_data.get('genres', [])]
-                        
-                        search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
-                        async with session.get(search_url_fa) as tmdb_response_fa:
-                            tmdb_data_fa = await tmdb_response_fa.json()
-                            tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
-                            tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
-                        
-                        trailer = None
-                        videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}&language=en"
-                        async with session.get(videos_url) as videos_response:
-                            videos_data = await videos_response.json()
-                            if videos_data.get('results'):
-                                for video in videos_data['results']:
-                                    if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                        trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                        break
-                        
-                        imdb_score = await get_imdb_score_omdb(tmdb_title) or await get_imdb_score_tmdb(tmdb_title)
-                        if not imdb_score:
-                            logger.warning(f"امتیاز معتبر برای {tmdb_title} یافت نشد")
-                            continue
-                        
-                        plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else get_fallback_by_genre(FALLBACK_PLOTS, genres)
-                        previous_plots.append(plot)
-                        if len(previous_plots) > 10:
-                            previous_plots.pop(0)
-                        
-                        return {
-                            'title': tmdb_title,
-                            'year': tmdb_year,
-                            'plot': plot,
-                            'imdb': imdb_score,
-                            'trailer': trailer,
-                            'poster': tmdb_poster,
-                            'genres': genres[:3]
-                        }
-
-                # 3. OMDb
-                logger.info(f"تلاش با OMDb برای {title}")
-                omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-                async with session.get(omdb_url) as omdb_response:
-                    if omdb_response.status == 429:
-                        logger.warning(f"خطای 429: Rate Limit برای OMDb، تلاش {attempt + 1}")
-                        await asyncio.sleep(3)
-                        continue
-                    omdb_data = await omdb_response.json()
-                    logger.info(f"پاسخ OMDb برای {title}: {omdb_data}")
-                    if omdb_data.get('Response') == 'True':
-                        imdb_score = omdb_data.get('imdbRating', '0')
-                        if float(imdb_score) >= 6.0:
-                            genres = omdb_data.get('Genre', '').split(', ')
-                            genres = [GENRE_TRANSLATIONS.get(g.strip(), g.strip()) for g in genres]
-                            return {
-                                'title': omdb_data.get('Title', title),
-                                'year': omdb_data.get('Year', 'N/A'),
-                                'plot': omdb_data.get('Plot', get_fallback_by_genre(FALLBACK_PLOTS, genres)),
-                                'imdb': f"{float(imdb_score):.1f}/10",
-                                'trailer': None,
-                                'poster': omdb_data.get('Poster', None),
-                                'genres': genres[:3]
-                            }
-                
-                logger.warning(f"هیچ API برای {title} جواب نداد، تلاش {attempt + 1}")
-        except Exception as e:
-            logger.error(f"خطا در دریافت اطلاعات فیلم {title} (تلاش {attempt + 1}): {str(e)}")
-            await asyncio.sleep(3)
     
-    logger.error(f"هیچ اطلاعاتی برای {title} یافت نشد")
-    return None
+    # 1. RapidAPI
+    logger.info(f"تلاش با RapidAPI برای {title}")
+    rapidapi_score = await get_imdb_score_rapidapi(title)
+    if rapidapi_score:
+        headers = {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "imdb236.p.rapidapi.com"
+        }
+        encoded_title = urllib.parse.quote(title)
+        rapidapi_url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/{encoded_title}"
+        rapidapi_data = await make_api_request(rapidapi_url, headers=headers)
+        if rapidapi_data and rapidapi_data.get('results'):
+            movie = rapidapi_data['results'][0]
+            genres = movie.get('genres', '').split(', ')
+            genres = [GENRE_TRANSLATIONS.get(g, 'سایر') for g in genres]
+            return {
+                'title': movie.get('title', title),
+                'year': movie.get('description', '')[:4],
+                'plot': get_fallback_by_genre(FALLBACK_PLOTS, genres),
+                'imdb': rapidapi_score,
+                'trailer': None,
+                'poster': movie.get('image', None),
+                'genres': genres[:3]
+            }
+    
+    # 2. TMDB
+    logger.info(f"تلاش با TMDB برای {title}")
+    encoded_title = urllib.parse.quote(title)
+    search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
+    tmdb_data_en = await make_api_request(search_url_en)
+    if tmdb_data_en and tmdb_data_en.get('results'):
+        movie = tmdb_data_en['results'][0]
+        movie_id = movie.get('id')
+        tmdb_title = movie.get('title', title)
+        tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
+        
+        details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
+        details_data = await make_api_request(details_url)
+        genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
+        
+        search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
+        tmdb_data_fa = await make_api_request(search_url_fa)
+        tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
+        tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
+        
+        trailer = None
+        videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}&language=en"
+        videos_data = await make_api_request(videos_url)
+        if videos_data and videos_data.get('results'):
+            for video in videos_data['results']:
+                if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                    trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                    break
+        
+        imdb_score = await get_imdb_score_tmdb(tmdb_title)
+        if not imdb_score:
+            logger.warning(f"امتیاز معتبر برای {tmdb_title} یافت نشد")
+        else:
+            plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else get_fallback_by_genre(FALLBACK_PLOTS, genres)
+            previous_plots.append(plot)
+            if len(previous_plots) > 10:
+                previous_plots.pop(0)
+            return {
+                'title': tmdb_title,
+                'year': tmdb_year,
+                'plot': plot,
+                'imdb': imdb_score,
+                'trailer': trailer,
+                'poster': tmdb_poster,
+                'genres': genres[:3]
+            }
+    
+    # 3. OMDb
+    logger.info(f"تلاش با OMDb برای {title}")
+    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
+    omdb_data = await make_api_request(omdb_url)
+    if omdb_data and omdb_data.get('Response') == 'True':
+        imdb_score = omdb_data.get('imdbRating', '0')
+        if float(imdb_score) >= 6.0:
+            genres = omdb_data.get('Genre', '').split(', ')
+            genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+            return {
+                'title': omdb_data.get('Title', title),
+                'year': omdb_data.get('Year', 'N/A'),
+                'plot': omdb_data.get('Plot', get_fallback_by_genre(FALLBACK_PLOTS, genres)),
+                'imdb': f"{float(imdb_score):.1f}/10",
+                'trailer': None,
+                'poster': omdb_data.get('Poster', None),
+                'genres': genres[:3]
+            }
+    
+    logger.error(f"هیچ API برای {title} جواب نداد")
+    if api_errors['rapidapi'] > 5 or api_errors['tmdb'] > 5 or api_errors['omdb'] > 5:
+        await send_admin_alert(None, f"⚠️ هشدار: APIهای متعدد ({api_errors}) خطا دارند. لطفاً بررسی کنید.")
+    return FALLBACK_MOVIE
 
 async def generate_comment(genres):
     global gemini_available, openai_available
@@ -383,6 +444,8 @@ async def generate_comment(genres):
                 logger.error(f"خطا: توکن Gemini تمام شده است: {str(e)}")
                 gemini_available = False
                 await send_admin_alert(None, "❌ توکن Gemini تمام شده است. تلاش با Open AI...")
+            except google_exceptions.ClientError as e:
+                logger.error(f"خطای کلاینت Gemini (تلاش {attempt + 1}): {str(e)}")
             except Exception as e:
                 logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
     
@@ -428,102 +491,83 @@ async def generate_comment(genres):
 
 async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str):
     try:
-        if context:
-            await context.bot.send_message(ADMIN_ID, message)
-        else:
-            async with aiohttp.ClientSession() as session:
-                url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                payload = {"chat_id": ADMIN_ID, "text": message}
-                async with session.post(url, json=payload) as response:
-                    result = await response.json()
-                    if not result.get('ok'):
-                        logger.error(f"خطا در ارسال هشدار به ادمین: {result}")
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": ADMIN_ID, "text": message}
+            async with session.post(url, json=payload) as response:
+                result = await response.json()
+                if not result.get('ok'):
+                    logger.error(f"خطا در ارسال هشدار به ادمین: {result}")
     except Exception as e:
         logger.error(f"خطا در ارسال هشدار به ادمین: {str(e)}")
 
 async def fetch_movies_to_cache():
     global cached_movies, last_fetch_time
     logger.info("شروع آپدیت کش فیلم‌ها...")
+    new_movies = []
     for attempt in range(3):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
-                new_movies = []
                 page = 1
                 while len(new_movies) < 100 and page <= 5:
-                    # 1. TMDB (اولویت تا RapidAPI درست شه)
-                    logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
-                    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
-                    async with session.get(tmdb_url) as tmdb_response:
-                        if tmdb_response.status == 429:
-                            logger.warning(f"خطای 429: Rate Limit برای TMDB، تلاش {attempt + 1}")
-                            await asyncio.sleep(3)
-                            continue
-                        tmdb_data = await tmdb_response.json()
-                        logger.info(f"پاسخ TMDB برای کش: {tmdb_data}")
-                        if 'results' in tmdb_data and tmdb_data['results']:
-                            for m in tmdb_data['results']:
-                                if (m.get('title') and m.get('id') and
-                                    m.get('original_language') != 'hi' and
-                                    'IN' not in m.get('origin_country', []) and
-                                    m.get('poster_path')):
-                                    imdb_score = await get_imdb_score_omdb(m['title']) or await get_imdb_score_tmdb(m['title'])
-                                    if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
-                                        new_movies.append({'title': m['title'], 'id': m['id']})
-                            page += 1
-
-                    # 2. OMDb
-                    logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
-                    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&s=movie&type=movie&page={page}"
-                    async with session.get(omdb_url) as omdb_response:
-                        if omdb_response.status == 429:
-                            logger.warning(f"خطای 429: Rate Limit برای OMDb، تلاش {attempt + 1}")
-                            await asyncio.sleep(3)
-                            continue
-                        omdb_data = await omdb_response.json()
-                        logger.info(f"پاسخ OMDb برای کش: {omdb_data}")
-                        if omdb_data.get('Search'):
-                            for m in omdb_data['Search']:
-                                imdb_score = await get_imdb_score_omdb(m['Title'])
-                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
-                                    new_movies.append({'title': m['Title'], 'id': m['imdbID']})
-                            page += 1
-
-                    # 3. RapidAPI
+                    # 1. RapidAPI
                     logger.info(f"تلاش با RapidAPI برای کش، صفحه {page}")
                     headers = {
                         "x-rapidapi-key": RAPIDAPI_KEY,
                         "x-rapidapi-host": "imdb236.p.rapidapi.com"
                     }
                     rapidapi_url = f"https://imdb236.p.rapidapi.com/v1/MostPopularMovies"
-                    async with session.get(rapidapi_url, headers=headers) as rapidapi_response:
-                        if rapidapi_response.status == 429:
-                            logger.warning(f"خطای 429: Rate Limit برای RapidAPI، تلاش {attempt + 1}")
-                            await asyncio.sleep(3)
-                            continue
-                        rapidapi_data = await rapidapi_response.json()
-                        logger.info(f"پاسخ RapidAPI برای کش: {rapidapi_data}")
-                        if rapidapi_data.get('items'):
-                            for m in rapidapi_data['items']:
-                                if float(m.get('imDbRating', 0)) >= 6.0:
+                    rapidapi_data = await make_api_request(rapidapi_url, headers=headers)
+                    if rapidapi_data and rapidapi_data.get('items'):
+                        for m in rapidapi_data['items']:
+                            if float(m.get('imDbRating', 0)) >= 6.0:
+                                new_movies.append({'title': m['title'], 'id': m['id']})
+                        break
+                    
+                    # 2. TMDB
+                    logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
+                    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
+                    tmdb_data = await make_api_request(tmdb_url)
+                    if tmdb_data and tmdb_data.get('results'):
+                        for m in tmdb_data['results']:
+                            if (m.get('title') and m.get('id') and
+                                m.get('original_language') != 'hi' and
+                                'IN' not in m.get('origin_country', []) and
+                                m.get('poster_path')):
+                                imdb_score = await get_imdb_score_omdb(m['title']) or await get_imdb_score_tmdb(m['title'])
+                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
                                     new_movies.append({'title': m['title'], 'id': m['id']})
-                            break
+                        page += 1
+
+                    # 3. OMDb
+                    logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
+                    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&s=movie&type=movie&page={page}"
+                    omdb_data = await make_api_request(omdb_url)
+                    if omdb_data and omdb_data.get('Search'):
+                        for m in omdb_data['Search']:
+                            imdb_score = await get_imdb_score_omdb(m['Title'])
+                            if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                                new_movies.append({'title': m['Title'], 'id': m['imdbID']})
+                        page += 1
                 
                 if new_movies:
                     cached_movies = new_movies[:100]
                     last_fetch_time = datetime.now()
+                    await save_cache_to_file()
                     logger.info(f"لیست فیلم‌ها آپدیت شد. تعداد: {len(cached_movies)}")
                     return True
                 logger.error("داده‌ای از هیچ API دریافت نشد")
-                cached_movies = [{'title': 'Inception', 'id': 'tt1375666'}, {'title': 'The Matrix', 'id': 'tt0133093'}]
-                last_fetch_time = datetime.now()
-                return False
         except Exception as e:
             logger.error(f"خطا در آپدیت کش (تلاش {attempt + 1}): {str(e)}")
             await asyncio.sleep(3)
     
-    logger.error("تلاش‌ها برای آپدیت کش ناموفق بود")
+    logger.error("تلاش‌ها برای آپدیت کش ناموفق بود، لود از فایل")
+    if await load_cache_from_file():
+        return True
     cached_movies = [{'title': 'Inception', 'id': 'tt1375666'}, {'title': 'The Matrix', 'id': 'tt0133093'}]
+    await save_cache_to_file()
     last_fetch_time = datetime.now()
+    await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد، استفاده از فال‌بک")
     return False
 
 async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
@@ -538,7 +582,7 @@ async def get_random_movie(max_retries=3):
     logger.info("انتخاب فیلم تصادفی...")
     for attempt in range(max_retries):
         try:
-            if not cached_movies or (datetime.now() - last_fetch_time).seconds > 86400:
+            if not cached_movies or (datetime.now() - last_fetch_time).seconds > FETCH_INTERVAL:
                 logger.info("کش خالی یا قدیمی، آپدیت کش...")
                 await fetch_movies_to_cache()
             
@@ -550,6 +594,7 @@ async def get_random_movie(max_retries=3):
             if not available_movies:
                 logger.warning("هیچ فیلم جدیدی در کش نیست، ریست لیست پست‌شده‌ها")
                 posted_movies.clear()
+                await save_posted_movies_to_file()
                 available_movies = cached_movies
             
             movie = random.choice(available_movies)
@@ -560,6 +605,7 @@ async def get_random_movie(max_retries=3):
                 continue
             
             posted_movies.append(movie['id'])
+            await save_posted_movies_to_file()
             comment = await generate_comment(movie_info['genres'])
             if not comment:
                 logger.error("تحلیل تولید نشد، استفاده از فال‌بک")
@@ -577,6 +623,10 @@ async def get_random_movie(max_retries=3):
                 rating = 2
             else:
                 rating = 1
+            
+            if movie_info['poster']:
+                if not await check_poster(movie_info['poster']):
+                    movie_info['poster'] = None
             
             return {
                 **movie_info,
@@ -772,58 +822,30 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در post_now: {e}")
         await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
 
-async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    logger.info("دکمه test_all")
-    await query.answer()
-    msg = await query.message.edit_text("در حال تست سرویس‌ها...")
+async def run_tests(context: ContextTypes.DEFAULT_TYPE):
     results = []
     
     # تست RapidAPI
-    for attempt in range(5):
-        try:
-            async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
-                headers = {
-                    "x-rapidapi-key": RAPIDAPI_KEY,
-                    "x-rapidapi-host": "imdb236.p.rapidapi.com"
-                }
-                url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/test"
-                async with session.get(url, headers=headers) as response:
-                    data = await response.json()
-                    rapidapi_status = "✅ RapidAPI اوکی" if data.get('results') or data.get('errorMessage') else f"❌ RapidAPI خطا: {data}"
-                    results.append(rapidapi_status)
-                    break
-        except aiohttp.client_exceptions.ClientConnectorError as e:
-            logger.error(f"خطای اتصال RapidAPI (تلاش {attempt + 1}): {str(e)}")
-            if attempt == 4:
-                results.append(f"❌ RapidAPI خطا: {str(e)}")
-        except Exception as e:
-            logger.error(f"خطا در RapidAPI (تلاش {attempt + 1}): {str(e)}")
-            if attempt == 4:
-                results.append(f"❌ RapidAPI خطا: {str(e)}")
-        await asyncio.sleep(3)
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "imdb236.p.rapidapi.com"
+    }
+    url = f"https://imdb236.p.rapidapi.com/v1/SearchMovie/test"
+    data = await make_api_request(url, headers=headers)
+    rapidapi_status = "✅ RapidAPI اوکی" if data and (data.get('results') or data.get('errorMessage')) else f"❌ RapidAPI خطا: {data}"
+    results.append(rapidapi_status)
 
     # تست TMDB
-    try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
-            tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
-            async with session.get(tmdb_url) as tmdb_res:
-                tmdb_data = await tmdb_res.json()
-                tmdb_status = "✅ TMDB اوکی" if tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
-        results.append(tmdb_status)
-    except Exception as e:
-        results.append(f"❌ TMDB خطا: {str(e)}")
+    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
+    tmdb_data = await make_api_request(tmdb_url)
+    tmdb_status = "✅ TMDB اوکی" if tmdb_data and tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
+    results.append(tmdb_status)
 
     # تست OMDb
-    try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
-            omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t=Inception&type=movie"
-            async with session.get(omdb_url) as omdb_res:
-                omdb_data = await omdb_res.json()
-                omdb_status = "✅ OMDb اوکی" if omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error')}"
-        results.append(omdb_status)
-    except Exception as e:
-        results.append(f"❌ OMDb خطا: {str(e)}")
+    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t=Inception&type=movie"
+    omdb_data = await make_api_request(omdb_url)
+    omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error')}"
+    results.append(omdb_status)
 
     # تست JobQueue
     job_queue = context.job_queue
@@ -842,33 +864,33 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results.append(f"❌ Gemini خطا: {str(e)}")
 
     # تست Open AI
-    for attempt in range(5):
-        try:
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Write in Persian."},
-                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-                ],
-                max_tokens=50,
-                temperature=0.7,
-                timeout=30
-            )
-            text = response.choices[0].message.content.strip()
-            openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-            results.append(openai_status)
-            break
-        except aiohttp.client_exceptions.ClientConnectorError as e:
-            logger.error(f"خطای اتصال Open AI (تلاش {attempt + 1}): {str(e)}")
-            if attempt == 4:
-                results.append(f"❌ Open AI خطا: Connection error")
-        except Exception as e:
-            logger.error(f"خطا در تست Open AI (تلاش {attempt + 1}): {str(e)}")
-            if attempt == 4:
-                results.append(f"❌ Open AI خطا: {str(e)}")
-        await asyncio.sleep(3)
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Write in Persian."},
+                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+            ],
+            max_tokens=50,
+            temperature=0.7,
+            timeout=30
+        )
+        text = response.choices[0].message.content.strip()
+        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+        results.append(openai_status)
+    except Exception as e:
+        logger.error(f"خطا در تست Open AI: {str(e)}")
+        results.append(f"❌ Open AI خطا: {str(e)}")
     
-    await msg.edit_text("\n".join(results), reply_markup=get_tests_menu())
+    await send_admin_alert(context, "📋 نتایج تست:\n" + "\n".join(results))
+
+async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه test_all")
+    await query.answer()
+    msg = await query.message.edit_text("در حال اجرای تست‌ها... نتایج به‌زودی ارسال می‌شود")
+    asyncio.create_task(run_tests(context))
+    await msg.edit_text("✅ تست‌ها در پس‌زمینه اجرا شدند. نتایج به ادمین ارسال می‌شود.", reply_markup=get_tests_menu())
 
 async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -905,6 +927,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         now = datetime.now()
         views_week = []
+        posts_count = 0
         
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-100"
@@ -924,13 +947,20 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         time_diff = now - message_time
                         if time_diff <= timedelta(days=7):
                             views_week.append(post['views'])
+                            posts_count += 1
         
         if not views_week:
             raise Exception("هیچ پستی در 7 روز اخیر یافت نشد. لطفاً حداقل یک پست منتشر کنید.")
         
         avg_week = sum(views_week) / len(views_week)
+        total_views = sum(views_week)
         
-        result = f"📊 آمار بازدید کانال:\n- میانگین بازدید 7 روز اخیر: {avg_week:.1f}"
+        result = (
+            f"📊 آمار بازدید کانال:\n"
+            f"- تعداد پست‌ها (7 روز اخیر): {posts_count}\n"
+            f"- مجموع بازدیدها: {total_views}\n"
+            f"- میانگین بازدید: {avg_week:.1f}"
+        )
         await msg.edit_text(result, reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"خطا در بررسی بازدید: {str(e)}")
@@ -965,7 +995,7 @@ async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_admin_alert(context, f"🤖 ربات {status} شد")
     except Exception as e:
         logger.error(f"خطا در toggle_bot: {str(e)}")
-        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+        await msg.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
 
 async def reset_webhook_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1041,6 +1071,7 @@ async def run_bot():
         logger.info("Application ساخته شد")
     except Exception as e:
         logger.error(f"خطا در ساخت Application: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در ساخت بات: {str(e)}")
         raise
     
     app.add_handler(CommandHandler("start", start))
@@ -1061,12 +1092,14 @@ async def run_bot():
     job_queue = app.job_queue
     if job_queue:
         logger.info("JobQueue فعال شد")
-        job_queue.run_repeating(auto_post, interval=600, first=10)
-        job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)
+        job_queue.run_repeating(auto_post, interval=POST_INTERVAL, first=10)
+        job_queue.run_repeating(auto_fetch_movies, interval=FETCH_INTERVAL, first=60)
     else:
-        logger.error("JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
-        await send_admin_alert(None, "⚠️ هشدار: JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
-        asyncio.create_task(fallback_scheduler(app.context))
+        logger.error("JobQueue فعال نشد، ربات متوقف می‌شود")
+        await send_admin_alert(None, "❌ خطا: JobQueue فعال نشد. لطفاً ربات را بررسی کنید.")
+        global bot_enabled
+        bot_enabled = False
+        raise Exception("JobQueue غیرفعال است")
     
     await app.initialize()
     await app.start()
@@ -1074,16 +1107,10 @@ async def run_bot():
     logger.info("بات تلگرام با موفقیت راه‌اندازی شد")
     return app
 
-async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("اجرای زمان‌بندی جایگزین...")
-    while True:
-        await auto_post(context)
-        await asyncio.sleep(600)
-        if (datetime.now() - last_fetch_time).seconds > 86400:
-            await auto_fetch_movies(context)
-
 async def main():
     logger.info("شروع برنامه...")
+    await load_cache_from_file()
+    await load_posted_movies_from_file()
     if not await fetch_movies_to_cache():
         logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
     
@@ -1097,6 +1124,7 @@ async def main():
                 logger.info(f"ریست Webhook: {result}")
     except Exception as e:
         logger.error(f"خطا در ریست Webhook اولیه: {e}")
+        await send_admin_alert(None, f"❌ خطا در ریست Webhook اولیه: {str(e)}")
     
     bot_app = await run_bot()
     web_runner = await run_web()
