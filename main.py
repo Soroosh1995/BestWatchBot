@@ -86,7 +86,7 @@ async def get_movie_info(title):
             # دریافت تریلر (اول با en-US، بعد بدون زبان)
             trailer = "تریلر موجود نیست"
             if movie_id:
-                for lang in ['', '&language=en-US']:  # تست با و بدون زبان
+                for lang in ['', '&language=en-US']:
                     videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}{lang}"
                     async with session.get(videos_url) as videos_response:
                         videos_data = await videos_response.json()
@@ -214,6 +214,8 @@ def format_movie_post(movie):
     stars = '⭐️' * movie['rating']
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
+    # کاراکتر RLM برای راست‌چین کردن
+    rlm = '\u200F'
     
     return f"""
 🎬 <b>عنوان فیلم:</b>
@@ -223,7 +225,7 @@ def format_movie_post(movie):
 {clean_text(movie['year'])}
 
 📝 <b>خلاصه داستان:</b>
-{clean_text(movie['plot'])}
+{rlm}{clean_text(movie['plot'])}
 
 🌟 <b>امتیاز:</b>
 <b>IMDB: {clean_text(movie['imdb'])}</b>
@@ -232,7 +234,7 @@ def format_movie_post(movie):
 {clean_text(movie['trailer'])}
 
 🍿 <b>حرف ما:</b>
-<p dir="rtl">{clean_text(movie['comment'])}</p>
+{rlm}{clean_text(movie['comment'])}
 
 🎯 <b>ارزش دیدن: {stars}</b>
 
