@@ -8,12 +8,13 @@ import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from aiohttp import web
+from aiohttp import web, ClientTimeout
 import re
 import urllib.parse
 from datetime import datetime, time, timedelta
 from google.api_core import exceptions as google_exceptions
 from openai import AsyncOpenAI
+import aiohttp.client_exceptions
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -148,11 +149,12 @@ def get_fallback_by_genre(options, genres):
 async def get_movie_info(title):
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
             encoded_title = urllib.parse.quote(title)
             search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
             async with session.get(search_url_en) as tmdb_response_en:
                 tmdb_data_en = await tmdb_response_en.json()
+                logger.info(f"پاسخ TMDB (انگلیسی) برای {title}: {tmdb_data_en}")
                 if not tmdb_data_en.get('results'):
                     logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} (انگلیسی) نداد")
                     return None
@@ -244,28 +246,31 @@ async def generate_comment(genres):
                 logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
     
     if openai_available and not gemini_available:
-        try:
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                    {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
-                ],
-                max_tokens=150,
-                temperature=0.7
-            )
-            text = response.choices[0].message.content.strip()
-            sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
-            if len(sentences) >= 3 and is_farsi(text) and len(text.split()) > 15:
-                previous_comments.append(text)
-                if len(previous_comments) > 10:
-                    previous_comments.pop(0)
-                return '. '.join(sentences[:3]) + '.'
-            logger.warning(f"تحلیل Open AI نامعتبر: {text}")
-        except Exception as e:
-            logger.error(f"خطا در Open AI API: {str(e)}")
-            openai_available = False
-            await send_admin_alert(None, "❌ توکن Open AI تمام شده است. هیچ تحلیلگر دیگری در دسترس نیست.")
+        for attempt in range(3):
+            try:
+                response = await client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a professional film critic writing in Persian."},
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                    ],
+                    max_tokens=150,
+                    temperature=0.7
+                )
+                text = response.choices[0].message.content.strip()
+                sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+                if len(sentences) >= 3 and is_farsi(text) and len(text.split()) > 15:
+                    previous_comments.append(text)
+                    if len(previous_comments) > 10:
+                        previous_comments.pop(0)
+                    return '. '.join(sentences[:3]) + '.'
+                logger.warning(f"تحلیل Open AI نامعتبر: {text}")
+            except Exception as e:
+                logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
+                if attempt == 2:
+                    openai_available = False
+                    await send_admin_alert(None, "❌ توکن Open AI تمام شده یا مشکل اتصال. هیچ تحلیلگر دیگری در دسترس نیست.")
+            await asyncio.sleep(1)
     
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
     comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
@@ -293,7 +298,7 @@ async def fetch_movies_to_cache():
     global cached_movies, last_fetch_time
     logger.info("شروع آپدیت کش فیلم‌ها...")
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
             new_movies = []
             page = 1
             while len(new_movies) < 100 and page <= 5:
@@ -414,8 +419,8 @@ def format_movie_post(movie):
 """)
     
     post_sections.append(f"""
-🌟 <b>امتیاز:</b>
-<b>IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
+🌟 <b>امتیاز (منبع: TMDB):</b>
+<b>{clean_text(movie['imdb']) or 'نامشخص'}</b>
 """)
     
     if movie['trailer'] and movie['trailer'].startswith('http'):
@@ -581,7 +586,7 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
             tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
             async with session.get(tmdb_url) as tmdb_res:
                 tmdb_data = await tmdb_res.json()
@@ -604,22 +609,30 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در تست Gemini: {str(e)}")
         results.append(f"❌ Gemini خطا: {str(e)}")
     
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Write in Persian."},
-                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-            ],
-            max_tokens=50,
-            temperature=0.7
-        )
-        text = response.choices[0].message.content.strip()
-        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-        results.append(openai_status)
-    except Exception as e:
-        logger.error(f"خطا در تست Open AI: {str(e)}")
-        results.append(f"❌ Open AI خطا: {str(e)}")
+    for attempt in range(3):
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                max_tokens=50,
+                temperature=0.7
+            )
+            text = response.choices[0].message.content.strip()
+            openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+            results.append(openai_status)
+            break
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطا در تست Open AI (تلاش {attempt + 1}): Connection error - {str(e)}")
+            if attempt == 2:
+                results.append(f"❌ Open AI خطا: Connection error")
+        except Exception as e:
+            logger.error(f"خطا در تست Open AI (تلاش {attempt + 1}): {str(e)}")
+            if attempt == 2:
+                results.append(f"❌ Open AI خطا: {str(e)}")
+        await asyncio.sleep(1)
     
     await msg.edit_text("\n".join(results), reply_markup=get_tests_menu())
 
@@ -723,7 +736,7 @@ async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info("دکمه add_movie")
     await query.answer()
-    await query.message.edit_text("لطفاً نام فیلم را به انگلیسی (مثل 'Dune') یا فارسی (مثل 'تل‌ماسه') وارد کنید:")
+    await query.message.edit_text("لطفاً نام فیلم را به انگلیسی (مثل 'Dune') یا فارسی (مثل 'تل‌ماسه') وارد کنید. چند لحظه صبر کنید...")
     return ADD_MOVIE_TITLE
 
 async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -747,26 +760,19 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد", reply_markup=get_main_menu())
         return ConversationHandler.END
     
-    msg = await update.message.reply_text(f"در حال جستجوی فیلم {title}...")
+    msg = await update.message.reply_text(f"در حال جستجوی فیلم {title}، لطفاً صبر کنید...")
     logger.info(f"تلاش برای اضافه کردن فیلم: {title}")
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
             encoded_title = urllib.parse.quote(title)
-            # جستجو با زبان انگلیسی
-            search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-            async with session.get(search_url_en) as response:
+            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
+            async with session.get(search_url) as response:
                 data = await response.json()
-                logger.info(f"پاسخ TMDB (انگلیسی) برای {title}: {data}")
+                logger.info(f"پاسخ TMDB برای {title}: {data}")
                 if not data.get('results'):
-                    # جستجو با زبان فارسی
-                    search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
-                    async with session.get(search_url_fa) as response_fa:
-                        data = await response_fa.json()
-                        logger.info(f"پاسخ TMDB (فارسی) برای {title}: {data}")
-                        if not data.get('results'):
-                            await msg.edit_text(f"❌ فیلم {title} یافت نشد", reply_markup=get_main_menu())
-                            return ConversationHandler.END
+                    await msg.edit_text(f"❌ فیلم {title} یافت نشد. لطفاً نام را دقیق‌تر (انگلیسی یا فارسی) وارد کنید.", reply_markup=get_main_menu())
+                    return ConversationHandler.END
                 
                 movie = data['results'][0]
                 movie_id = movie.get('id')
@@ -789,6 +795,10 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cached_movies.append({'title': movie['title'], 'id': movie_id})
                 await msg.edit_text(f"✅ فیلم {title} به لیست اضافه شد", reply_markup=get_main_menu())
                 return ConversationHandler.END
+    except aiohttp.ClientError as e:
+        logger.error(f"خطا در اتصال به TMDB برای {title}: {str(e)}")
+        await msg.edit_text(f"❌ خطا در جستجوی فیلم: مشکل اتصال به سرور. لطفاً دوباره امتحان کنید.", reply_markup=get_main_menu())
+        return ConversationHandler.END
     except Exception as e:
         logger.error(f"خطا در اضافه کردن فیلم {title}: {str(e)}")
         await msg.edit_text(f"❌ خطا در اضافه کردن فیلم: {str(e)}", reply_markup=get_main_menu())
