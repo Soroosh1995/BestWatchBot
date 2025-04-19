@@ -445,10 +445,15 @@ async def get_movie_info(title):
         if float(imdb_score) >= 6.0:
             genres = omdb_data.get('Genre', '').split(', ')
             genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+            plot = omdb_data.get('Plot', '')
+            plot = shorten_plot(plot) if plot and is_farsi(plot) else get_fallback_by_genre(FALLBACK_PLOTS, genres)
+            previous_plots.append(plot)
+            if len(previous_plots) > 10:
+                previous_plots.pop(0)
             return {
                 'title': omdb_data.get('Title', title),
                 'year': omdb_data.get('Year', 'N/A'),
-                'plot': omdb_data.get('Plot', get_fallback_by_genre(FALLBACK_PLOTS, genres)),
+                'plot': plot,
                 'imdb': f"{float(imdb_score):.1f}/10",
                 'trailer': None,
                 'poster': omdb_data.get('Poster', None),
@@ -491,7 +496,7 @@ async def generate_comment(genres):
     
     # 2. DeepSeek
     if deepseek_available:
-        max_attempts = 5
+        max_attempts = 7
         for attempt in range(max_attempts):
             try:
                 url = "https://api.deepseek.com/v1/chat/completions"
@@ -517,7 +522,9 @@ async def generate_comment(genres):
                         if len(previous_comments) > 10:
                             previous_comments.pop(0)
                         return '. '.join(sentences[:3]) + '.'
-                logger.warning(f"تحلیل DeepSeek نامعتبر (تلاش {attempt + 1}): {response}")
+                    logger.warning(f"تحلیل DeepSeek نامعتبر (تلاش {attempt + 1}): {text}")
+                else:
+                    logger.warning(f"پاسخ DeepSeek خالی یا نامعتبر (تلاش {attempt + 1}): {response}")
             except aiohttp.client_exceptions.ClientConnectorError as e:
                 logger.error(f"خطای اتصال DeepSeek (تلاش {attempt + 1}): {str(e)}")
                 api_errors['deepseek'] += 1
@@ -534,7 +541,8 @@ async def generate_comment(genres):
     
     # 3. Open AI
     if openai_available:
-        for attempt in range(7):
+        max_attempts = 10
+        for attempt in range(max_attempts):
             try:
                 response = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -556,15 +564,15 @@ async def generate_comment(genres):
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
             except aiohttp.client_exceptions.ClientConnectorError as e:
                 logger.error(f"خطای اتصال Open AI (تلاش {attempt + 1}): {str(e)}")
-                if attempt == 6:
+                if attempt == max_attempts - 1:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. استفاده از فال‌بک.")
+                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد یا خیر. استفاده از فال‌بک.")
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
                 logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
-                if attempt == 6:
+                if attempt == max_attempts - 1:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. استفاده از فال‌بک.")
+                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید. استفاده از فال‌بک.")
                 await asyncio.sleep(2 ** attempt)
     
     # 4. فال‌بک
@@ -575,11 +583,13 @@ async def generate_comment(genres):
         previous_comments.pop(0)
     return comment
 
-async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str):
+async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str, reply_markup=None):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             payload = {"chat_id": ADMIN_ID, "text": message}
+            if reply_markup:
+                payload["reply_markup"] = json.dumps(reply_markup.to_dict())
             async with session.post(url, json=payload) as response:
                 result = await response.json()
                 if not result.get('ok'):
@@ -595,7 +605,7 @@ async def fetch_movies_to_cache():
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
                 page = 1
-                while len(new_movies) < 50 and page <= 10:
+                while len(new_movies) < 100 and page <= 20:
                     # 1. TMDB
                     logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
                     tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
@@ -623,7 +633,7 @@ async def fetch_movies_to_cache():
                         page += 1
                 
                 if new_movies:
-                    cached_movies = new_movies[:50]
+                    cached_movies = new_movies[:100]
                     last_fetch_time = datetime.now()
                     await save_cache_to_file()
                     logger.info(f"لیست فیلم‌ها آپدیت شد. تعداد: {len(cached_movies)}")
@@ -944,7 +954,10 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
         }
         response = await post_api_request(url, data, headers)
         text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
-        deepseek_status = "✅ DeepSeek اوکی" if text and is_farsi(text) else f"❌ DeepSeek خطا: پاسخ نامعتبر"
+        if text and is_farsi(text):
+            deepseek_status = "✅ DeepSeek اوکی"
+        else:
+            deepseek_status = f"❌ DeepSeek خطا: پاسخ نامعتبر - متن دریافتی: {text}"
         results.append(deepseek_status)
     except Exception as e:
         logger.error(f"خطا در تست DeepSeek: {str(e)}")
@@ -965,11 +978,16 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
         text = response.choices[0].message.content.strip()
         openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
         results.append(openai_status)
+    except aiohttp.client_exceptions.ClientConnectorError as e:
+        logger.error(f"خطا در تست Open AI: {str(e)}")
+        results.append(f"❌ Open AI خطا: مشکل اتصال - {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد.")
     except Exception as e:
         logger.error(f"خطا در تست Open AI: {str(e)}")
-        results.append(f"❌ Open AI خطا: {str(e)}")
-    
-    await send_admin_alert(context, "📋 نتایج تست:\n" + "\n".join(results))
+        results.append(f"❌ Open AI خطا: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید.")
+
+    # دکمه برگشت
+    reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]])
+    await send_admin_alert(context, "📋 نتایج تست:\n" + "\n".join(results), reply_markup=reply_markup)
 
 async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
