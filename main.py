@@ -6,7 +6,7 @@ import aiohttp
 import random
 import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 from aiohttp import web
 import re
@@ -74,6 +74,9 @@ FALLBACK_MOVIE = {
     'genres': ['علمی-تخیلی', 'هیجان‌انگیز']
 }
 
+# --- حالت‌های ConversationHandler ---
+ADD_MOVIE_TITLE = 1
+
 # --- توابع کمکی ---
 def clean_text(text):
     """پاکسازی متن بدون اسکیپ برای HTML"""
@@ -93,10 +96,10 @@ def is_farsi(text):
 
 def is_valid_plot(text):
     """چک کردن معتبر بودن خلاصه داستان"""
-    if not text or len(text.split()) < 10 or text in previous_plots:
+    if not text or len(text.split()) < 5 or text in previous_plots:
         return False
     sentences = text.split('. ')
-    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 2
+    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
 
 async def get_movie_info(title):
     """دریافت اطلاعات فیلم از TMDB با فیلترهای دقیق"""
@@ -155,13 +158,14 @@ async def get_movie_info(title):
             # انتخاب خلاصه داستان
             plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else None
             if not plot or not is_valid_plot(plot):
+                logger.info(f"خلاصه فارسی نامعتبر برای {title}: {plot}")
                 # فال‌بک به خلاصه انگلیسی یا متن پیش‌فرض
                 details_url_en = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
                 async with session.get(details_url_en) as details_response_en:
                     details_data_en = await details_response_en.json()
                     plot_en = details_data_en.get('overview', '')
-                    plot = shorten_plot(plot_en) if plot_en else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
-                logger.info(f"خلاصه {'انگلیسی' if plot_en else 'فال‌بک'} برای {title}")
+                    plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else (shorten_plot(plot_en) if plot_en else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند.")
+                logger.info(f"خلاصه {'فارسی' if is_farsi(plot) else 'انگلیسی یا فال‌بک'} برای {title}")
             else:
                 logger.info(f"خلاصه فارسی از TMDB برای {title}")
             
@@ -215,7 +219,7 @@ async def fetch_movies_to_cache():
             new_movies = []
             page = 1
             while len(new_movies) < 100 and page <= 5:
-                url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page={page}"
+                url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
                 async with session.get(url) as response:
                     data = await response.json()
                     if 'results' not in data or not data['results']:
@@ -349,54 +353,96 @@ def format_movie_post(movie):
 {channel_link}
 """
 
+def get_main_menu():
+    """ساخت منوی اصلی"""
+    keyboard = [
+        [InlineKeyboardButton("آپدیت لیست", callback_data='fetch_movies')],
+        [InlineKeyboardButton("ارسال فوری فیلم", callback_data='post_now')],
+        [InlineKeyboardButton("تست‌ها", callback_data='tests_menu')],
+        [InlineKeyboardButton("اضافه کردن فیلم", callback_data='add_movie')],
+        [InlineKeyboardButton("بررسی آمار بازدید", callback_data='stats')]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_tests_menu():
+    """ساخت منوی تست‌ها"""
+    keyboard = [
+        [InlineKeyboardButton("دسترسی‌های فنی", callback_data='test_all')],
+        [InlineKeyboardButton("بررسی ربات به کانال", callback_data='test_channel')],
+        [InlineKeyboardButton("بازگشت", callback_data='back_to_main')]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دستور شروع برای ادمین"""
-    if str(update.message.from_user.id) == ADMIN_ID:
-        await update.message.reply_text("""
-🤖 دستورات ادمین:
-/fetchmovies - آپدیت لیست فیلم‌ها
-/postnow - ارسال پست فوری
-/test - تست TMDB، JobQueue و Gemini
-/testchannel - تست دسترسی به کانال
-/resetwebhook - ریست Webhook تلگرام
-/addmovie <نام فیلم> - اضافه کردن فیلم به لیست
-/stats - بررسی بازدید کانال
-""")
+    if str(update.message.from_user.id) != ADMIN_ID:
+        return
+    await update.message.reply_text("🤖 منوی ادمین:", reply_markup=get_main_menu())
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پردازش دکمه‌ها"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == 'back_to_main':
+        await query.message.edit_text("🤖 منوی ادمین:", reply_markup=get_main_menu())
+        return
+    elif query.data == 'tests_menu':
+        await query.message.edit_text("🛠 منوی تست‌ها:", reply_markup=get_tests_menu())
+        return
+    elif query.data == 'fetch_movies':
+        await fetch_movies(query, context)
+        return
+    elif query.data == 'post_now':
+        await post_now(query, context)
+        return
+    elif query.data == 'test_all':
+        await test_all(query, context)
+        return
+    elif query.data == 'test_channel':
+        await test_channel(query, context)
+        return
+    elif query.data == 'stats':
+        await get_channel_stats(query, context)
+        return
+    elif query.data == 'show_movies':
+        await show_movies(query, context)
+        return
 
 async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ریست Webhook تلگرام"""
-    if str(update.message.from_user.id) == ADMIN_ID:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
-                    json={"drop_pending_updates": True}
-                ) as response:
-                    result = await response.json()
-                    if result.get('ok'):
-                        await update.message.reply_text("✅ Webhook ریست شد")
-                    else:
-                        await update.message.reply_text(f"❌ خطا در ریست Webhook: {result.get('description')}")
-        except Exception as e:
-            logger.error(f"خطا در ریست Webhook: {e}")
-            await update.message.reply_text(f"❌ خطا در ریست Webhook: {str(e)}")
-
-async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تست دسترسی به کانال"""
     if str(update.message.from_user.id) != ADMIN_ID:
         return
     try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True}
+            ) as response:
+                result = await response.json()
+                if result.get('ok'):
+                    await update.message.reply_text("✅ Webhook ریست شد", reply_markup=get_main_menu())
+                else:
+                    await update.message.reply_text(f"❌ خطا در ریست Webhook: {result.get('description')}", reply_markup=get_main_menu())
+    except Exception as e:
+        logger.error(f"خطا در ریست Webhook: {e}")
+        await update.message.reply_text(f"❌ خطا در ریست Webhook: {str(e)}", reply_markup=get_main_menu())
+
+async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تست دسترسی به کانال"""
+    query = update.callback_query if update.callback_query else None
+    msg = await (query.message.edit_text("در حال تست دسترسی به کانال...") if query else update.message.reply_text("در حال تست دسترسی به کانال..."))
+    try:
         await context.bot.send_message(CHANNEL_ID, "تست دسترسی بات")
-        await update.message.reply_text("✅ دسترسی به کانال اوکی")
+        await msg.edit_text("✅ دسترسی به کانال اوکی", reply_markup=get_tests_menu())
     except Exception as e:
         logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
-        await update.message.reply_text(f"❌ خطا در تست دسترسی به کانال: {str(e)}")
+        await msg.edit_text(f"❌ خطا در تست دسترسی به کانال: {str(e)}", reply_markup=get_tests_menu())
 
 async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تست سرویس‌های TMDB، JobQueue و Gemini"""
-    if str(update.message.from_user.id) != ADMIN_ID:
-        return
-    msg = await update.message.reply_text("در حال تست سرویس‌ها...")
+    query = update.callback_query if update.callback_query else None
+    msg = await (query.message.edit_text("در حال تست سرویس‌ها...") if query else update.message.reply_text("در حال تست سرویس‌ها..."))
     results = []
     
     # تست TMDB
@@ -421,20 +467,21 @@ async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         results.append(f"❌ Gemini خطا: {str(e)}")
     
-    await msg.edit_text("\n".join(results))
+    await msg.edit_text("\n".join(results), reply_markup=get_tests_menu())
 
-async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اضافه کردن فیلم به کش"""
-    if str(update.message.from_user.id) != ADMIN_ID:
-        return
-    if not context.args:
-        await update.message.reply_text("لطفاً نام فیلم را وارد کنید: /addmovie <نام فیلم>")
-        return
-    
-    title = ' '.join(context.args).strip()
+async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع اضافه کردن فیلم"""
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("لطفاً نام فیلم را وارد کنید:")
+    return ADD_MOVIE_TITLE
+
+async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پردازش نام فیلم"""
+    title = update.message.text.strip()
     if not title:
-        await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد")
-        return
+        await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد", reply_markup=get_main_menu())
+        return ConversationHandler.END
     
     msg = await update.message.reply_text(f"در حال اضافه کردن فیلم {title}...")
     logger.info(f"تلاش برای اضافه کردن فیلم: {title}")
@@ -447,32 +494,33 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data = await response.json()
                 logger.info(f"پاسخ TMDB برای {title}: {data}")
                 if 'results' not in data or not data['results']:
-                    await msg.edit_text(f"❌ فیلم {title} یافت نشد")
-                    return
+                    await msg.edit_text(f"❌ فیلم {title} یافت نشد", reply_markup=get_main_menu())
+                    return ConversationHandler.END
                 
                 movie = data['results'][0]
                 if (movie.get('original_language') == 'hi' or
                     'IN' in movie.get('origin_country', []) or
                     movie.get('vote_average', 0) < 5.0):
-                    await msg.edit_text(f"❌ فیلم {title} شرایط (غیر هندی، امتیاز >= 5) را ندارد")
-                    return
+                    await msg.edit_text(f"❌ فیلم {title} شرایط (غیر هندی، امتیاز >= 5) را ندارد", reply_markup=get_main_menu())
+                    return ConversationHandler.END
                 
                 movie_id = movie['id']
                 if movie_id in [m['id'] for m in cached_movies]:
-                    await msg.edit_text(f"❌ فیلم {title} در لیست موجود است")
-                    return
+                    await msg.edit_text(f"❌ فیلم {title} در لیست موجود است", reply_markup=get_main_menu())
+                    return ConversationHandler.END
                 
                 cached_movies.append({'title': movie['title'], 'id': movie_id})
-                await msg.edit_text(f"✅ فیلم {title} به لیست اضافه شد")
+                await msg.edit_text(f"✅ فیلم {title} به لیست اضافه شد", reply_markup=get_main_menu())
+                return ConversationHandler.END
     except Exception as e:
         logger.error(f"خطا در اضافه کردن فیلم {title}: {str(e)}")
-        await msg.edit_text(f"❌ خطا در اضافه کردن فیلم: {str(e)}")
+        await msg.edit_text(f"❌ خطا در اضافه کردن فیلم: {str(e)}", reply_markup=get_main_menu())
+        return ConversationHandler.END
 
 async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """بررسی بازدید کانال"""
-    if str(update.message.from_user.id) != ADMIN_ID:
-        return
-    msg = await update.message.reply_text("در حال بررسی بازدید کانال...")
+    query = update.callback_query if update.callback_query else None
+    msg = await (query.message.edit_text("در حال بررسی بازدید کانال...") if query else update.message.reply_text("در حال بررسی بازدید کانال..."))
     
     try:
         now = datetime.now()
@@ -481,10 +529,9 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         views_month = []
         
         async with aiohttp.ClientSession() as session:
-            # تست دسترسی به پیام‌های کانال
+            # تست دسترسی به کانال
             logger.info(f"چک دسترسی به کانال {CHANNEL_ID}")
             test_message = await context.bot.send_message(CHANNEL_ID, "تست دسترسی برای آمار")
-            await context.bot.delete_message(CHANNEL_ID, test_message.message_id)
             
             # گرفتن پیام‌های اخیر
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-100"
@@ -492,7 +539,7 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data = await response.json()
                 logger.info(f"پاسخ getUpdates: {data}")
                 if not data.get('ok') or not data.get('result'):
-                    raise Exception("هیچ پیامی دریافت نشد. مطمئن شوید بات ادمین کانال است و پیام‌های اخیر دارد.")
+                    raise Exception("هیچ پیامی دریافت نشد. مطمئن شوید بات ادمین کانال است با دسترسی کامل (can_post_messages و can_view_channel_posts) و پیام‌های اخیر دارد.")
                 
                 for update in data['result']:
                     if 'channel_post' in update:
@@ -509,6 +556,9 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             views_week.append(post['views'])
                         if time_diff <= timedelta(days=30):
                             views_month.append(post['views'])
+            
+            # حذف پیام تستی
+            await context.bot.delete_message(CHANNEL_ID, test_message.message_id)
         
         if not views_24h and not views_week and not views_month:
             raise Exception("هیچ بازدیدی ثبت نشد. احتمالاً کانال پیام اخیر ندارد یا بات دسترسی لازم را ندارد.")
@@ -523,60 +573,62 @@ async def get_channel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - میانگین بازدید هفته گذشته: {avg_week:.1f}
 - میانگین بازدید ماه گذشته: {avg_month:.1f}
 """
-        await msg.edit_text(result)
+        await msg.edit_text(result, reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"خطا در بررسی بازدید: {str(e)}")
-        await msg.edit_text(f"❌ خطا در بررسی بازدید: {str(e)}")
+        await msg.edit_text(f"❌ خطا در بررسی بازدید: {str(e)}", reply_markup=get_main_menu())
 
 async def fetch_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """آپدیت دستی کش فیلم‌ها"""
-    if str(update.message.from_user.id) != ADMIN_ID:
-        return
-    msg = await update.message.reply_text("در حال آپدیت لیست...")
+    query = update.callback_query
+    msg = await query.message.edit_text("در حال آپدیت لیست...")
     if await fetch_movies_to_cache():
-        keyboard = [[InlineKeyboardButton("لیست فیلم‌ها", callback_data='show_movies')]]
+        keyboard = [[InlineKeyboardButton("لیست فیلم‌ها", callback_data='show_movies')],
+                    [InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await msg.edit_text(f"✅ لیست آپدیت شد! ({len(cached_movies)} فیلم)", reply_markup=reply_markup)
     else:
-        await msg.edit_text("❌ خطا در آپدیت لیست")
+        await msg.edit_text("❌ خطا در آپدیت لیست", reply_markup=get_main_menu())
 
 async def show_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نمایش لیست فیلم‌های کش‌شده"""
     query = update.callback_query
     await query.answer()
     if not cached_movies:
-        await query.message.reply_text("❌ لیست فیلم‌ها خالی است")
+        await query.message.edit_text("❌ لیست فیلم‌ها خالی است", reply_markup=get_main_menu())
         return
     
-    movies_list = "\n".join([f"{i+1}. {m['title']} (ID: {m['id']})" for i, m in enumerate(cached_movies)])
-    await query.message.reply_text(f"📋 لیست فیلم‌ها:\n{movies_list}")
+    movies_list = "\n".join([f"{i+1}. {m['title']}" for i, m in enumerate(cached_movies)])
+    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(f"📋 لیست فیلم‌ها:\n{movies_list}", reply_markup=reply_markup)
 
 async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ارسال پست دستی"""
-    if str(update.message.from_user.id) == ADMIN_ID:
-        msg = await update.message.reply_text("در حال آماده‌سازی پست...")
-        movie = await get_random_movie()
-        if movie:
-            try:
-                if movie['poster']:
-                    await context.bot.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=movie['poster'],
-                        caption=format_movie_post(movie),
-                        parse_mode='HTML'
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=format_movie_post(movie),
-                        parse_mode='HTML'
-                    )
-                await msg.edit_text(f"✅ پست {movie['title']} ارسال شد")
-            except Exception as e:
-                logger.error(f"خطا در ارسال پست: {e}")
-                await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}")
-        else:
-            await msg.edit_text("❌ خطا در یافتن فیلم")
+    query = update.callback_query
+    msg = await query.message.edit_text("در حال آماده‌سازی پست...")
+    movie = await get_random_movie()
+    if movie:
+        try:
+            if movie['poster']:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=movie['poster'],
+                    caption=format_movie_post(movie),
+                    parse_mode='HTML'
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=format_movie_post(movie),
+                    parse_mode='HTML'
+                )
+            await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
+        except Exception as e:
+            logger.error(f"خطا در ارسال پست: {e}")
+            await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
+    else:
+        await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     """ارسال پست خودکار"""
@@ -620,15 +672,20 @@ async def run_bot():
         logger.error(f"خطا در ساخت Application: {str(e)}")
         raise
     
+    # اضافه کردن هندلرها
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("fetchmovies", fetch_movies))
-    app.add_handler(CommandHandler("postnow", post_now))
-    app.add_handler(CommandHandler("test", test_all))
-    app.add_handler(CommandHandler("testchannel", test_channel))
     app.add_handler(CommandHandler("resetwebhook", reset_webhook))
-    app.add_handler(CommandHandler("addmovie", add_movie))
-    app.add_handler(CommandHandler("stats", get_channel_stats))
-    app.add_handler(CallbackQueryHandler(show_movies, pattern='show_movies'))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    # ConversationHandler برای add_movie
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_movie_start, pattern='add_movie')],
+        states={
+            ADD_MOVIE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_movie_title)]
+        },
+        fallbacks=[]
+    )
+    app.add_handler(conv_handler)
     
     job_queue = app.job_queue
     if job_queue:
