@@ -17,6 +17,7 @@ import aiohttp.client_exceptions
 import re
 import certifi
 import json
+import httpx
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -42,7 +43,11 @@ FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 86400))
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # تنظیم Open AI
-client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=aiohttp.ClientSession())
+client = None
+
+async def init_openai_client():
+    global client
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=httpx.AsyncClient())
 
 # --- کش و متغیرهای سراسری ---
 cached_movies = []
@@ -995,7 +1000,7 @@ async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_admin_alert(context, f"🤖 ربات {status} شد")
     except Exception as e:
         logger.error(f"خطا در toggle_bot: {str(e)}")
-        await msg.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
 
 async def reset_webhook_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1109,6 +1114,7 @@ async def run_bot():
 
 async def main():
     logger.info("شروع برنامه...")
+    await init_openai_client()  # مقداردهی Open AI client
     await load_cache_from_file()
     await load_posted_movies_from_file()
     if not await fetch_movies_to_cache():
@@ -1139,6 +1145,8 @@ async def main():
         await bot_app.stop()
         await bot_app.shutdown()
         await web_runner.cleanup()
+        if client:
+            await client.close()
 
 if __name__ == '__main__':
     asyncio.run(main())
