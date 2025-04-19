@@ -390,41 +390,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """پردازش دکمه‌ها"""
     query = update.callback_query
     await query.answer()
-    logger.info(f"دکمه زده شد: {query.data}")
+    callback_data = query.data
+    logger.info(f"دکمه زده شد: {callback_data}")
     
     try:
-        if query.data == 'back_to_main':
+        if callback_data == 'back_to_main':
             logger.info("بازگشت به منوی اصلی")
             await query.message.edit_text("🤖 منوی ادمین:", reply_markup=get_main_menu())
-        elif query.data == 'tests_menu':
+        elif callback_data == 'tests_menu':
             logger.info("نمایش منوی تست‌ها")
             await query.message.edit_text("🛠 منوی تست‌ها:", reply_markup=get_tests_menu())
-        elif query.data == 'fetch_movies':
+        elif callback_data == 'fetch_movies':
             logger.info("اجرای fetch_movies")
             await fetch_movies(query, context)
-        elif query.data == 'post_now':
+        elif callback_data == 'post_now':
             logger.info("اجرای post_now")
             await post_now(query, context)
-        elif query.data == 'test_all':
+        elif callback_data == 'test_all':
             logger.info("اجرای test_all")
             await test_all(query, context)
-        elif query.data == 'test_channel':
+        elif callback_data == 'test_channel':
             logger.info("اجرای test_channel")
             await test_channel(query, context)
-        elif query.data == 'stats':
+        elif callback_data == 'stats':
             logger.info("اجرای get_channel_stats")
             await get_channel_stats(query, context)
-        elif query.data == 'show_movies':
+        elif callback_data == 'show_movies':
             logger.info("اجرای show_movies")
             await show_movies(query, context)
-        elif query.data == 'add_movie':
+        elif callback_data == 'add_movie':
             logger.info("شروع add_movie")
             return await add_movie_start(query, context)
         else:
-            logger.warning(f"دکمه ناشناخته: {query.data}")
+            logger.warning(f"دکمه ناشناخته: {callback_data}")
             await query.message.edit_text("❌ دکمه ناشناخته", reply_markup=get_main_menu())
     except Exception as e:
-        logger.error(f"خطا در پردازش دکمه {query.data}: {str(e)}")
+        logger.error(f"خطا در پردازش دکمه {callback_data}: {str(e)}")
         await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
 
 async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
