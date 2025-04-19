@@ -4,6 +4,7 @@ import os
 import logging
 import aiohttp
 import random
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
@@ -23,11 +24,15 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
+
+# تنظیم Gemini
+genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- کش فیلم‌ها و لیست پست‌شده‌ها ---
 cached_movies = []
-posted_movies = []  # برای جلوگیری از پست تکراری
+posted_movies = []
 last_fetch_time = None
 
 # --- دیکشنری ترجمه ژانرها ---
@@ -60,7 +65,7 @@ FALLBACK_MOVIE = {
     'imdb': '8.8/10',
     'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
     'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
-    'comment': 'این فیلم اثری جذاب در ژانر علمی-تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست. اگر فیلم‌های فکری دوست دارید، حتماً تماشا کنید!',
+    'comment': 'این فیلم اثری جذاب در ژانر علمی-تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست.',
     'rating': 4,
     'special': True,
     'genres': ['علمی-تخیلی', 'هیجان‌انگیز']
@@ -74,9 +79,9 @@ def clean_text(text):
     return text[:300]
 
 def shorten_plot(text, max_sentences=3):
-    """کوتاه کردن خلاصه داستان به 2-3 جمله"""
+    """کوتاه کردن خلاصه داستان به 2-3 جمله بدون محدودیت طول"""
     sentences = text.split('. ')
-    return '. '.join(sentences[:max_sentences])[:100]
+    return '. '.join(sentences[:max_sentences]) + ('.' if sentences else '')
 
 def is_farsi(text):
     """چک کردن فارسی بودن متن"""
@@ -84,7 +89,7 @@ def is_farsi(text):
     return bool(re.search(farsi_chars, text))
 
 async def get_movie_info(title):
-    """دریافت اطلاعات فیلم فقط از TMDB با عنوان و پوستر انگلیسی"""
+    """دریافت اطلاعات فیلم از TMDB با فیلترهای دقیق"""
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
@@ -98,28 +103,31 @@ async def get_movie_info(title):
                 movie = tmdb_data_en['results'][0]
                 movie_id = movie.get('id')
                 tmdb_title = movie.get('title', title)
-                tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else 'N/A'
+                tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
             
-            # جستجو برای اطلاعات فارسی (خلاصه، سال)
+            # جستجو برای اطلاعات فارسی
             search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
             async with session.get(search_url_fa) as tmdb_response_fa:
                 tmdb_data_fa = await tmdb_response_fa.json()
                 tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
                 tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
             
-            # دریافت ژانرها
-            genres = []
+            # دریافت ژانرها و امتیاز
             details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
             async with session.get(details_url) as details_response:
                 details_data = await details_response.json()
-                imdb_score = str(round(details_data.get('vote_average', 0), 1))
-                imdb = f"{imdb_score}/10" if imdb_score != '0' else 'N/A'
+                imdb_score = details_data.get('vote_average', 0)
+                if imdb_score < 5.0:
+                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+                    return None
+                imdb = f"{round(imdb_score, 1)}/10"
+                genres = []
                 for genre in details_data.get('genres', []):
                     genre_name = genre['name']
                     genres.append(GENRE_TRANSLATIONS.get(genre_name, genre_name))
             
             # دریافت تریلر
-            trailer = "تریلر موجود نیست"
+            trailer = None
             if movie_id:
                 for lang in ['', '&language=en-US']:
                     videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}{lang}"
@@ -130,7 +138,7 @@ async def get_movie_info(title):
                                 if video['type'] == 'Trailer' and video['site'] == 'YouTube':
                                     trailer = f"https://www.youtube.com/watch?v={video['key']}"
                                     break
-                            if trailer != "تریلر موجود نیست":
+                            if trailer:
                                 break
             
             # انتخاب خلاصه داستان
@@ -144,16 +152,27 @@ async def get_movie_info(title):
                 'imdb': imdb,
                 'trailer': trailer,
                 'poster': tmdb_poster,
-                'genres': genres[:3]  # حداکثر 3 ژانر
+                'genres': genres[:3]
             }
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات فیلم {title}: {str(e)}")
         return None
 
 async def generate_comment(_):
-    """تولید تحلیل پیش‌فرض بدون نام فیلم"""
-    logger.info("تولید تحلیل پیش‌فرض")
-    return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است، هرچند ممکن است برخی صحنه‌ها کمی قابل پیش‌بینی باشند. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
+    """تولید تحلیل با Gemini API"""
+    logger.info("تولید تحلیل با Gemini")
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، حداکثر 3 جمله، با لحن حرفه‌ای و سینمایی."
+        response = await model.generate_content_async(prompt)
+        text = response.text.strip()
+        if not text or not is_farsi(text):
+            logger.warning("تحلیل Gemini نامعتبر، استفاده از فال‌بک")
+            return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
+        return text
+    except Exception as e:
+        logger.error(f"خطا در Gemini API: {str(e)}")
+        return "این فیلم اثری جذاب است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB (100 فیلم)"""
@@ -163,7 +182,7 @@ async def fetch_movies_to_cache():
         async with aiohttp.ClientSession() as session:
             new_movies = []
             page = 1
-            while len(new_movies) < 100 and page <= 5:  # حداکثر 5 صفحه
+            while len(new_movies) < 100 and page <= 5:
                 url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page={page}"
                 async with session.get(url) as response:
                     data = await response.json()
@@ -173,11 +192,12 @@ async def fetch_movies_to_cache():
                         if (m.get('title') and m.get('id') and
                             m.get('original_language') != 'hi' and
                             'IN' not in m.get('origin_country', []) and
-                            m.get('vote_average', 0) >= 5.0):
+                            m.get('vote_average', 0) >= 5.0 and
+                            m.get('poster_path')):
                             new_movies.append({'title': m['title'], 'id': m['id']})
                     page += 1
             if new_movies:
-                cached_movies = new_movies[:100]  # حداکثر 100 فیلم
+                cached_movies = new_movies[:100]
                 last_fetch_time = datetime.now()
                 logger.info(f"لیست فیلم‌ها آپدیت شد. تعداد: {len(cached_movies)}")
                 return True
@@ -228,13 +248,13 @@ async def get_random_movie(max_retries=3):
             movie = random.choice(available_movies)
             logger.info(f"فیلم انتخاب شد: {movie['title']} (تلاش {attempt + 1})")
             movie_info = await get_movie_info(movie['title'])
-            if not movie_info:
-                logger.warning(f"اطلاعات فیلم {movie['title']} دریافت نشد، تلاش مجدد...")
+            if not movie_info or movie_info['imdb'] == '0.0/10':
+                logger.warning(f"اطلاعات فیلم {movie['title']} نامعتبر، تلاش مجدد...")
                 continue
             
-            posted_movies.append(movie['id'])  # اضافه کردن به لیست پست‌شده‌ها
+            posted_movies.append(movie['id'])
             comment = await generate_comment(movie_info['title'])
-            imdb_score = float(movie_info['imdb'].split('/')[0]) if movie_info['imdb'] != 'N/A' else 0
+            imdb_score = float(movie_info['imdb'].split('/')[0])
             
             if imdb_score >= 9.0:
                 rating = 5
@@ -268,7 +288,11 @@ def format_movie_post(movie):
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
     rlm = '\u200F'
-    genres = ' '.join([f'#{g}' for g in movie['genres']]) if movie['genres'] else '#سینمایی'
+    genres = ' '.join([f'#{g.replace(" ", "_")}' for g in movie['genres']]) if movie['genres'] else '#سینمایی'
+    
+    trailer_section = f"""
+🎞 <b>لینک تریلر:</b>
+{clean_text(movie['trailer'])}""" if movie['trailer'] and movie['trailer'].startswith('http') else ''
     
     return f"""
 🎬 <b>عنوان فیلم:</b>
@@ -281,9 +305,7 @@ def format_movie_post(movie):
 
 🌟 <b>امتیاز:</b>
 <b>IMDB: {clean_text(movie['imdb'])}</b>
-
-🎞 <b>لینک تریلر:</b>
-{clean_text(movie['trailer'])}
+{trailer_section}
 
 🍿 <b>حرف ما:</b>
 {rlm}{clean_text(movie['comment'])}
@@ -354,6 +376,13 @@ async def test_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تست JobQueue
     job_queue = context.job_queue
     results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
+    
+    # تست Gemini
+    try:
+        comment = await generate_comment(None)
+        results.append("✅ Gemini اوکی" if comment else "❌ Gemini خطا")
+    except Exception as e:
+        results.append(f"❌ Gemini خطا: {str(e)}")
     
     await msg.edit_text("\n".join(results))
 
@@ -450,7 +479,7 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         movie = await get_random_movie()
         if movie:
             try:
-                if movie['poster'] != 'N/A' and movie['poster'].startswith('http'):
+                if movie['poster']:
                     await context.bot.send_photo(
                         chat_id=CHANNEL_ID,
                         photo=movie['poster'],
@@ -477,7 +506,7 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     if movie:
         logger.info(f"فیلم انتخاب شد: {movie['title']}")
         try:
-            if movie['poster'] != 'N/A' and movie['poster'].startswith('http'):
+            if movie['poster']:
                 await context.bot.send_photo(
                     chat_id=CHANNEL_ID,
                     photo=movie['poster'],
@@ -518,8 +547,8 @@ async def run_bot():
     job_queue = app.job_queue
     if job_queue:
         logger.info("JobQueue فعال شد")
-        job_queue.run_repeating(auto_post, interval=7200, first=10)  # هر 2 ساعت
-        job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)  # هر 24 ساعت
+        job_queue.run_repeating(auto_post, interval=7200, first=10)
+        job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)
     else:
         logger.error("JobQueue فعال نشد")
         await app.bot.send_message(ADMIN_ID, "❌ خطا: JobQueue فعال نشد")
