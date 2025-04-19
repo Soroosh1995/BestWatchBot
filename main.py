@@ -166,6 +166,7 @@ async def get_movie_info(title):
                 details_data = await details_response.json()
                 original_language = details_data.get('original_language', 'en')
                 imdb_score = details_data.get('vote_average', 0)
+                logger.info(f"امتیاز خام TMDB برای {title}: {imdb_score}")
                 if imdb_score < 6.0:
                     logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
                     return None
@@ -245,7 +246,7 @@ async def generate_comment(genres):
     if openai_available and not gemini_available:
         try:
             response = await client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a professional film critic writing in Persian."},
                     {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
@@ -364,13 +365,14 @@ async def get_random_movie(max_retries=3):
                 comment = get_fallback_by_genre(FALLBACK_COMMENTS, movie_info['genres'])
             
             imdb_score = float(movie_info['imdb'].split('/')[0])
-            if imdb_score >= 9.0:
+            logger.info(f"امتیاز برای {movie['title']}: {imdb_score}")
+            if imdb_score >= 8.5:
                 rating = 5
-            elif 8.0 <= imdb_score < 9.0:
+            elif 7.5 <= imdb_score < 8.5:
                 rating = 4
-            elif 7.0 <= imdb_score < 8.0:
+            elif 6.5 <= imdb_score < 7.5:
                 rating = 3
-            elif 6.0 <= imdb_score < 7.0:
+            elif 6.0 <= imdb_score < 6.5:
                 rating = 2
             else:
                 rating = 1
@@ -379,7 +381,7 @@ async def get_random_movie(max_retries=3):
                 **movie_info,
                 'comment': comment,
                 'rating': rating,
-                'special': imdb_score >= 9.0
+                'special': imdb_score >= 8.5
             }
         except Exception as e:
             logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
@@ -452,6 +454,9 @@ def get_main_menu():
         [
             InlineKeyboardButton("آمار بازدید", callback_data='stats'),
             InlineKeyboardButton(toggle_text, callback_data='toggle_bot')
+        ],
+        [
+            InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -601,7 +606,7 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Write in Persian."},
                 {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
@@ -624,7 +629,14 @@ async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     msg = await query.message.edit_text("در حال تست دسترسی به کانال...")
     try:
-        await context.bot.send_message(CHANNEL_ID, "تست دسترسی بات", disable_notification=True)
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
+            async with session.get(url) as response:
+                data = await response.json()
+                if not data.get('ok'):
+                    raise Exception(f"خطا در API تلگرام: {data.get('description')}")
+                if data['result']['status'] not in ['administrator', 'creator']:
+                    raise Exception("بات ادمین کانال نیست. لطفاً بات را ادمین کنید.")
         await msg.edit_text("✅ دسترسی به کانال اوکی", reply_markup=get_tests_menu())
     except Exception as e:
         logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
@@ -711,7 +723,7 @@ async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info("دکمه add_movie")
     await query.answer()
-    await query.message.edit_text("لطفاً نام فیلم را وارد کنید:")
+    await query.message.edit_text("لطفاً نام فیلم را به انگلیسی (مثل 'Dune') یا فارسی (مثل 'تل‌ماسه') وارد کنید:")
     return ADD_MOVIE_TITLE
 
 async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -741,13 +753,20 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async with aiohttp.ClientSession() as session:
             encoded_title = urllib.parse.quote(title)
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-            async with session.get(search_url) as response:
+            # جستجو با زبان انگلیسی
+            search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
+            async with session.get(search_url_en) as response:
                 data = await response.json()
-                logger.info(f"پاسخ TMDB برای {title}: {data}")
+                logger.info(f"پاسخ TMDB (انگلیسی) برای {title}: {data}")
                 if not data.get('results'):
-                    await msg.edit_text(f"❌ فیلم {title} یافت نشد", reply_markup=get_main_menu())
-                    return ConversationHandler.END
+                    # جستجو با زبان فارسی
+                    search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
+                    async with session.get(search_url_fa) as response_fa:
+                        data = await response_fa.json()
+                        logger.info(f"پاسخ TMDB (فارسی) برای {title}: {data}")
+                        if not data.get('results'):
+                            await msg.edit_text(f"❌ فیلم {title} یافت نشد", reply_markup=get_main_menu())
+                            return ConversationHandler.END
                 
                 movie = data['results'][0]
                 movie_id = movie.get('id')
@@ -780,11 +799,11 @@ async def add_movie_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ عملیات لغو شد", reply_markup=get_main_menu())
     return ConversationHandler.END
 
-async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.message.from_user.id) != ADMIN_ID:
-        logger.info(f"دسترسی غیرمجاز برای reset_webhook: {update.message.from_user.id}")
-        return
-    logger.info("اجرای reset_webhook")
+async def reset_webhook_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه reset_webhook")
+    await query.answer()
+    msg = await query.message.edit_text("در حال ریست Webhook...")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -793,12 +812,12 @@ async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ) as response:
                 result = await response.json()
                 if result.get('ok'):
-                    await update.message.reply_text("✅ Webhook ریست شد", reply_markup=get_main_menu())
+                    await msg.edit_text("✅ Webhook ریست شد", reply_markup=get_main_menu())
                 else:
-                    await update.message.reply_text(f"❌ خطا در ریست Webhook: {result.get('description')}", reply_markup=get_main_menu())
+                    await msg.edit_text(f"❌ خطا در ریست Webhook: {result.get('description')}", reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"خطا در ریست Webhook: {e}")
-        await update.message.reply_text(f"❌ خطا در ریست Webhook: {str(e)}", reply_markup=get_main_menu())
+        await msg.edit_text(f"❌ خطا در ریست Webhook: {str(e)}", reply_markup=get_main_menu())
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info("شروع پست خودکار...")
@@ -858,7 +877,7 @@ async def run_bot():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("debug", debug))
-    app.add_handler(CommandHandler("resetwebhook", reset_webhook))
+    app.add_handler(CommandHandler("resetwebhook", reset_webhook_handler))
     
     app.add_handler(CallbackQueryHandler(back_to_main, pattern='^back_to_main$'))
     app.add_handler(CallbackQueryHandler(tests_menu, pattern='^tests_menu$'))
@@ -870,6 +889,7 @@ async def run_bot():
     app.add_handler(CallbackQueryHandler(show_movies_handler, pattern='^show_movies$'))
     app.add_handler(CallbackQueryHandler(add_movie_start, pattern='^add_movie$'))
     app.add_handler(CallbackQueryHandler(toggle_bot_handler, pattern='^toggle_bot$'))
+    app.add_handler(CallbackQueryHandler(reset_webhook_handler, pattern='^reset_webhook$'))
     
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_movie_start, pattern='^add_movie$')],
