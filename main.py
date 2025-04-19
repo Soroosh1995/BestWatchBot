@@ -23,7 +23,8 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
-PORT = int(os.getenv('PORT', 8080))  # پورت اجباری برای Render
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+PORT = int(os.getenv('PORT', 8080))
 
 # --- کش فیلم‌ها ---
 cached_movies = []
@@ -38,10 +39,8 @@ async def fetch_movies():
     global cached_movies, last_fetch_time
     try:
         async with aiohttp.ClientSession() as session:
-            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page=1"
+            url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}"
             async with session.get(url, timeout=10) as response:
-                if response.status != 200:
-                    raise Exception(f"Status code: {response.status}")
                 data = await response.json()
                 cached_movies = data.get('results', [])
                 last_fetch_time = datetime.now()
@@ -57,8 +56,6 @@ async def get_movie_details(title):
         async with aiohttp.ClientSession() as session:
             url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
             async with session.get(url, timeout=10) as response:
-                if response.status != 200:
-                    raise Exception(f"Status code: {response.status}")
                 data = await response.json()
                 if data.get('Response') != 'True':
                     return None
@@ -73,13 +70,43 @@ async def get_movie_details(title):
         logger.error(f"خطا در دریافت جزئیات: {str(e)}")
         return None
 
+async def generate_analysis(title):
+    """تولید تحلیل با OpenAI"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{
+                "role": "user",
+                "content": f"تحلیل کوتاه و جذاب درباره فیلم {title} به زبان فارسی (حدود 100 کلمه)"
+            }],
+            "temperature": 0.7,
+            "max_tokens": 200
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            ) as response:
+                data = await response.json()
+                return data['choices'][0]['message']['content']
+    except Exception as e:
+        logger.error(f"خطا در تولید تحلیل: {str(e)}")
+        return "تحلیل در دسترس نیست"
+
 async def get_random_movie():
     """انتخاب تصادفی یک فیلم"""
     if not cached_movies or (datetime.now() - last_fetch_time).seconds > 3600:
         if not await fetch_movies():
             return None
     
-    for _ in range(3):  # 3 بار تلاش برای یافتن فیلم
+    for _ in range(3):  # 3 بار تلاش
         movie = random.choice(cached_movies)
         title = movie.get('title') or movie.get('original_title')
         if not title:
@@ -90,12 +117,15 @@ async def get_random_movie():
             try:
                 imdb_score = float(details['imdb']) if details['imdb'] != 'N/A' else 0
                 rating = min(5, max(1, int(imdb_score // 2)))
+                analysis = await generate_analysis(title)
                 return {
                     **details,
                     'rating': rating,
-                    'special': imdb_score >= 8.0
+                    'special': imdb_score >= 8.0,
+                    'analysis': analysis
                 }
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.error(f"خطا در پردازش امتیاز: {str(e)}")
                 continue
     
     return None
@@ -103,34 +133,33 @@ async def get_random_movie():
 def format_movie(movie):
     """قالب‌بندی پیام فیلم"""
     stars = '⭐️' * movie['rating']
-    special = ' 👑' if movie.get('special', False) else ''
-    channel = "[🎬 کانال فیلم‌های برتر](https://t.me/bestwatch_channel)"
+    special = ' 👑' if movie.get('special') else ''
     
     return f"""
-*{movie['title']}{special}*
+*🎬 {movie['title']}{special}*
 📅 سال: {movie['year']}
 🌟 امتیاز: {movie['imdb']}
 📖 خلاصه: {movie['plot'][:200]}...
+🍿 تحلیل: {movie['analysis']}
 🎯 ارزش دیدن: {stars}
 
-{channel}
+[📺 کانال ما](https://t.me/bestwatch_channel)
 """
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دستور شروع"""
-    if str(update.effective_user.id) == ADMIN_ID:
-        await update.message.reply_text("ربات فعال است! از /post برای ارسال فیلم استفاده کنید")
+    await update.message.reply_text("ربات فعال است! از /post استفاده کنید")
 
 async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ارسال فیلم به کانال"""
     if str(update.effective_user.id) != ADMIN_ID:
         return
     
-    msg = await update.message.reply_text("🔍 در حال پیدا کردن فیلم مناسب...")
+    msg = await update.message.reply_text("در حال آماده‌سازی...")
     movie = await get_random_movie()
     
     if not movie:
-        await msg.edit_text("⚠️ متأسفانه فیلمی یافت نشد. لطفاً بعداً تلاش کنید")
+        await msg.edit_text("⚠️ خطا در یافتن فیلم")
         return
     
     try:
@@ -148,10 +177,10 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=caption,
                 parse_mode='Markdown'
             )
-        await msg.edit_text(f"✅ فیلم «{movie['title']}» ارسال شد")
+        await msg.edit_text(f"✅ فیلم ارسال شد: {movie['title']}")
     except Exception as e:
-        logger.error(f"ارسال فیلم ناموفق: {str(e)}")
-        await msg.edit_text("❌ خطا در ارسال فیلم")
+        logger.error(f"خطا در ارسال: {str(e)}")
+        await msg.edit_text("❌ ارسال ناموفق")
 
 async def init_web_server():
     """سرور وب برای Render"""
@@ -166,25 +195,20 @@ async def init_web_server():
 
 async def main():
     """تابع اصلی"""
-    # ابتدا سرور وب را راه‌اندازی کنید
+    # راه‌اندازی سرور وب
     web_runner = await init_web_server()
     
-    # سپس ربات تلگرام را راه‌اندازی کنید
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("post", post_movie))
+    # راه‌اندازی ربات تلگرام
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("post", post_movie))
     
-    await application.initialize()
-    await application.start()
-    logger.info("🤖 ربات تلگرام آماده به کار!")
+    await app.initialize()
+    await app.start()
+    logger.info("🤖 ربات آماده به کار!")
     
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except asyncio.CancelledError:
-        await application.stop()
-        await web_runner.cleanup()
-        logger.info("ربات با موفقیت متوقف شد")
+    # اجرای نامحدود
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
     try:
