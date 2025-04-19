@@ -50,8 +50,9 @@ def clean_text(text):
     """پاکسازی متن برای MarkdownV2"""
     if not text or text == 'N/A':
         return "متن موجود نیست"
-    chars_to_escape = r'[_*[]()~`>#+-=|{}.!]'
-    text = re.sub(chars_to_escape, r'\\\g<0>', text)
+    # کاراکترهای خاص MarkdownV2
+    chars_to_escape = r'([_\[\]\(\)\~`>#\+-=|\{\}\.!])'
+    text = re.sub(chars_to_escape, r'\\\g<1>', text)
     return text[:300]
 
 def shorten_plot(text, max_sentences=3):
@@ -63,6 +64,20 @@ def is_farsi(text):
     """چک کردن فارسی بودن متن"""
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
+
+async def translate_title_to_english(title):
+    """ترجمه عنوان فارسی به انگلیسی با TMDB"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=en-US"
+            async with session.get(search_url) as response:
+                data = await response.json()
+                if data.get('results'):
+                    return data['results'][0].get('title', title)
+                return title
+    except Exception as e:
+        logger.error(f"خطا در ترجمه عنوان {title}: {str(e)}")
+        return title
 
 async def get_movie_info(title):
     """دریافت اطلاعات فیلم از TMDB و OMDB با فال‌بک"""
@@ -99,11 +114,13 @@ async def get_movie_info(title):
             # OMDB برای پوستر، امتیاز، و خلاصه فال‌بک
             omdb_data = None
             try:
-                omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+                # ترجمه عنوان به انگلیسی برای OMDB
+                omdb_title = await translate_title_to_english(title)
+                omdb_url = f"http://www.omdbapi.com/?t={omdb_title}&apikey={OMDB_API_KEY}"
                 async with session.get(omdb_url) as response:
                     omdb_data = await response.json()
                     if omdb_data.get('Response') != 'True':
-                        logger.error(f"OMDB پاسخ معتبر نداد برای {title}: {omdb_data.get('Error')}")
+                        logger.error(f"OMDB پاسخ معتبر نداد برای {omdb_title}: {omdb_data.get('Error')}")
                         omdb_data = None
             except Exception as e:
                 logger.error(f"خطا در درخواست OMDB برای {title}: {str(e)}")
@@ -123,8 +140,8 @@ async def get_movie_info(title):
             
             # اطلاعات نهایی
             info = {
-                'title': omdb_data.get('Title', tmdb_title) if omdb_data else tmdb_title,
-                'year': omdb_data.get('Year', tmdb_year) if omdb_data else tmdb_year,
+                'title': tmdb_title,
+                'year': tmdb_year,
                 'plot': plot,
                 'imdb': omdb_data.get('imdbRating', 'N/A') + '/10' if omdb_data and omdb_data.get('imdbRating') else 'N/A',
                 'rotten_tomatoes': next(
@@ -132,7 +149,7 @@ async def get_movie_info(title):
                     'N/A'
                 ),
                 'trailer': trailer,
-                'poster': omdb_data.get('Poster', 'N/A') if omdb_data else 'N/A'
+                'poster': omdb_data.get('Poster', 'N/A') if omdb_data and omdb_data.get('Poster') else 'N/A'
             }
             return info
     except Exception as e:
@@ -140,7 +157,7 @@ async def get_movie_info(title):
         return None
 
 async def generate_comment(title):
-    """تولید تحلیل با OpenAI (80-100 کلمه)"""
+    """تولید تحلیل با OpenAI یا فال‌بک پیش‌فرض"""
     logger.info(f"تولید تحلیل برای فیلم: {title}")
     try:
         prompt = f"""
@@ -175,10 +192,10 @@ async def generate_comment(title):
                 if 'choices' in data:
                     return clean_text(data['choices'][0]['message']['content'])
                 logger.error(f"OpenAI پاسخ معتبر نداد: {data}")
-                return "تحلیل موقت: این فیلم با داستان جذاب و بازیگری قوی، ارزش تماشا دارد، هرچند ممکن است پایانش کمی گنگ باشد."
+                return f"تحلیل موقت: {title} فیلمی جذاب با داستانی گیرا و بازیگری قوی است. کارگردانی حرفه‌ای آن شما را سرگرم می‌کند، هرچند ممکن است برخی صحنه‌ها کمی کند باشند. حتماً تماشا کنید!"
     except Exception as e:
         logger.error(f"خطا در تولید تحلیل برای {title}: {str(e)}")
-        return "تحلیل موقت: این فیلم یک تجربه سینمایی متفاوت است که شما را سرگرم خواهد کرد."
+        return f"تحلیل موقت: {title} فیلمی جذاب با داستانی گیرا و بازیگری قوی است. کارگردانی حرفه‌ای آن شما را سرگرم می‌کند، هرچند ممکن است برخی صحنه‌ها کمی کند باشند. حتماً تماشا کنید!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB"""
@@ -301,7 +318,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /postnow - ارسال پست فوری
 /testchannel - تست دسترسی به کانال
 /testapis - تست APIهای TMDB و OMDB
+/resetwebhook - ریست Webhook تلگرام
 """)
+
+async def reset_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ریست Webhook تلگرام"""
+    if str(update.message.from_user.id) == ADMIN_ID:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+                    json={"drop_pending_updates": True}
+                ) as response:
+                    result = await response.json()
+                    if result.get('ok'):
+                        await update.message.reply_text("✅ Webhook ریست شد")
+                    else:
+                        await update.message.reply_text(f"❌ خطا در ریست Webhook: {result.get('description')}")
+        except Exception as e:
+            logger.error(f"خطا در ریست Webhook: {e}")
+            await update.message.reply_text(f"❌ خطا در ریست Webhook: {str(e)}")
 
 async def test_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تست دسترسی به کانال"""
@@ -335,7 +371,18 @@ async def test_apis(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     omdb_status = f"❌ OMDB خطا: {str(e)}"
                 
-                await msg.edit_text(f"{tmdb_status}\n{omdb_status}")
+                # OpenAI
+                openai_status = "❌ OpenAI غیرفعال یا خطا"
+                try:
+                    headers = {"Authorization": f"Bearer {OPENAI_API_KEY.strip()}", "Content-Type": "application/json"}
+                    payload = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "تست"}]}
+                    async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as openai_res:
+                        openai_data = await openai_res.json()
+                        openai_status = "✅ OpenAI اوکی" if 'choices' in openai_data else f"❌ OpenAI خطا: {openai_data.get('error', {}).get('message', 'خطای ناشناخته')}"
+                except Exception as e:
+                    openai_status = f"❌ OpenAI خطا: {str(e)}"
+                
+                await msg.edit_text(f"{tmdb_status}\n{omdb_status}\n{openai_status}")
         except Exception as e:
             logger.error(f"خطا در تست APIها: {e}")
             await msg.edit_text(f"❌ خطا در تست APIها: {str(e)}")
@@ -356,7 +403,7 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         movie = await get_random_movie()
         if movie:
             try:
-                if movie['poster'] != 'N/A':
+                if movie['poster'] != 'N/A' and movie['poster'].startswith('http'):
                     await context.bot.send_photo(
                         chat_id=CHANNEL_ID,
                         photo=movie['poster'],
@@ -383,7 +430,7 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     if movie:
         logger.info(f"فیلم انتخاب شد: {movie['title']}")
         try:
-            if movie['poster'] != 'N/A':
+            if movie['poster'] != 'N/A' and movie['poster'].startswith('http'):
                 await context.bot.send_photo(
                     chat_id=CHANNEL_ID,
                     photo=movie['poster'],
@@ -418,6 +465,7 @@ async def run_bot():
     app.add_handler(CommandHandler("postnow", post_now))
     app.add_handler(CommandHandler("testchannel", test_channel))
     app.add_handler(CommandHandler("testapis", test_apis))
+    app.add_handler(CommandHandler("resetwebhook", reset_webhook))
     
     job_queue = app.job_queue
     if job_queue:
@@ -433,7 +481,7 @@ async def run_bot():
     return app
 
 async def run_web():
-    """راه Ascoltare il web server per Render"""
+    """راه‌اندازی سرور وب برای Render"""
     logger.info("شروع راه‌اندازی سرور وب...")
     app = web.Application()
     app.router.add_get('/health', health_check)
@@ -449,6 +497,18 @@ async def main():
     logger.info("شروع برنامه...")
     if not await fetch_movies_to_cache():
         logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
+    
+    # ریست Webhook در شروع
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True}
+            ) as response:
+                result = await response.json()
+                logger.info(f"ریست Webhook: {result}")
+    except Exception as e:
+        logger.error(f"خطا در ریست Webhook اولیه: {e}")
     
     # راه‌اندازی بات و سرور وب
     bot_app = await run_bot()
