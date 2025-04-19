@@ -545,6 +545,15 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
         logger.error("فیلم برای پست خودکار یافت نشد")
         await context.bot.send_message(ADMIN_ID, "❌ خطا: فیلم برای پست خودکار یافت نشد")
 
+async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
+    """زمان‌بندی جایگزین برای پست و آپدیت کش"""
+    logger.info("اجرای زمان‌بندی جایگزین...")
+    while True:
+        await auto_post(context)
+        await asyncio.sleep(7200)  # هر 2 ساعت
+        if (datetime.now() - last_fetch_time).seconds > 86400:
+            await auto_fetch_movies(context)
+
 async def health_check(request):
     """چک سلامت سرور"""
     return web.Response(text="OK")
@@ -552,7 +561,12 @@ async def health_check(request):
 async def run_bot():
     """راه‌اندازی بات تلگرام"""
     logger.info("شروع راه‌اندازی بات تلگرام...")
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    try:
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        logger.info("Application ساخته شد")
+    except Exception as e:
+        logger.error(f"خطا در ساخت Application: {str(e)}")
+        raise
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fetchmovies", fetch_movies))
@@ -568,8 +582,10 @@ async def run_bot():
         job_queue.run_repeating(auto_post, interval=7200, first=10)
         job_queue.run_repeating(auto_fetch_movies, interval=86400, first=60)
     else:
-        logger.error("JobQueue فعال نشد، ادامه بدون زمان‌بندی")
-        await app.bot.send_message(ADMIN_ID, "⚠️ هشدار: JobQueue فعال نشد، پست‌های خودکار غیرفعال هستند")
+        logger.error("JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
+        await app.bot.send_message(ADMIN_ID, "⚠️ هشدار: JobQueue فعال نشد، استفاده از زمان‌بندی جایگزین")
+        # راه‌اندازی زمان‌بندی جایگزین
+        asyncio.create_task(fallback_scheduler(app.context))
     
     await app.initialize()
     await app.start()
