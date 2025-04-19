@@ -37,7 +37,7 @@ FALLBACK_MOVIE = {
     'imdb': '8.8/10',
     'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
     'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
-    'comment': 'اینسپشن، اثری علمی-تخیلی از نولان، با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازی دی‌کاپریو و کارگردانی بی‌نقص، فیلم را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست که ممکن است برای همه جذاب نباشد. اگر فیلم‌های فکری دوست دارید، اینسپشن را ببینید!',
+    'comment': 'این فیلم اثری جذاب در ژانر علمی-تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست. اگر فیلم‌های فکری دوست دارید، حتماً تماشا کنید!',
     'rating': 4,
     'special': True
 }
@@ -83,16 +83,19 @@ async def get_movie_info(title):
                 tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
                 tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
             
-            # دریافت تریلر
-            trailer = "N/A"
+            # دریافت تریلر (اول با en-US، بعد بدون زبان)
+            trailer = "تریلر موجود نیست"
             if movie_id:
-                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                async with session.get(videos_url) as videos_response:
-                    videos_data = await videos_response.json()
-                    if videos_data.get('results'):
-                        for video in videos_data['results']:
-                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                for lang in ['', '&language=en-US']:  # تست با و بدون زبان
+                    videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}{lang}"
+                    async with session.get(videos_url) as videos_response:
+                        videos_data = await videos_response.json()
+                        if videos_data.get('results'):
+                            for video in videos_data['results']:
+                                if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                    trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                    break
+                            if trailer != "تریلر موجود نیست":
                                 break
             
             # انتخاب خلاصه داستان
@@ -118,10 +121,10 @@ async def get_movie_info(title):
         logger.error(f"خطا در دریافت اطلاعات فیلم {title}: {str(e)}")
         return None
 
-async def generate_comment(title):
-    """تولید تحلیل پیش‌فرض بدون OpenAI"""
-    logger.info(f"تولید تحلیل پیش‌فرض برای فیلم: {title}")
-    return f"{title} فیلمی جذاب در ژانر ماجراجویی است که با داستانی گیرا و جلوه‌های بصری قوی، شما را سرگرم می‌کند. بازیگری و کارگردانی حرفه‌ای از نقاط قوت آن است، هرچند ممکن است برخی صحنه‌ها کمی قابل پیش‌بینی باشند. اگر به دنبال یک تجربه سینمایی هیجان‌انگیز هستید، این فیلم را از دست ندهید!"
+async def generate_comment(_):
+    """تولید تحلیل پیش‌فرض بدون نام فیلم"""
+    logger.info("تولید تحلیل پیش‌فرض")
+    return "این فیلم اثری جذاب در ژانر ماجراجویی است که با داستانی گیرا و جلوه‌های بصری خیره‌کننده، شما را سرگرم می‌کند. بازیگری قوی و کارگردانی حرفه‌ای از نقاط قوت آن است، هرچند ممکن است برخی صحنه‌ها کمی قابل پیش‌بینی باشند. اگر به دنبال یک تجربه سینمایی مهیج هستید، حتماً تماشا کنید!"
 
 async def fetch_movies_to_cache():
     """آپدیت کش فیلم‌ها از TMDB"""
@@ -177,7 +180,7 @@ async def get_random_movie(max_retries=3):
                 logger.warning(f"اطلاعات فیلم {movie['title']} دریافت نشد، تلاش مجدد...")
                 continue
             
-            comment = await generate_comment(movie_info['title'])  # استفاده از عنوان انگلیسی
+            comment = await generate_comment(movie_info['title'])
             imdb_score = float(movie_info['imdb'].split('/')[0]) if movie_info['imdb'] != 'N/A' else 0
             
             if imdb_score >= 9.0:
@@ -207,15 +210,17 @@ async def get_random_movie(max_retries=3):
     return FALLBACK_MOVIE
 
 def format_movie_post(movie):
-    """فرمت پست با تگ HTML مثل دیپ‌سیک بدون Rotten Tomatoes"""
+    """فرمت پست با تگ HTML مثل دیپ‌سیک"""
     stars = '⭐️' * movie['rating']
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
     
     return f"""
-🎬 <b>عنوان فیلم: {clean_text(movie['title'])}{special}</b>
+🎬 <b>عنوان فیلم:</b>
+{clean_text(movie['title'])}{special}
 
-📅 <b>سال تولید: {clean_text(movie['year'])}</b>
+📅 <b>سال تولید:</b>
+{clean_text(movie['year'])}
 
 📝 <b>خلاصه داستان:</b>
 {clean_text(movie['plot'])}
@@ -227,7 +232,7 @@ def format_movie_post(movie):
 {clean_text(movie['trailer'])}
 
 🍿 <b>حرف ما:</b>
-{clean_text(movie['comment'])}
+<p dir="rtl">{clean_text(movie['comment'])}</p>
 
 🎯 <b>ارزش دیدن: {stars}</b>
 
