@@ -31,6 +31,20 @@ PORT = int(os.getenv('PORT', 8080))
 cached_movies = []
 last_fetch_time = None
 
+# --- فیلم پیش‌فرض برای فال‌بک ---
+FALLBACK_MOVIE = {
+    'title': 'Inception',
+    'year': '2010',
+    'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند.',
+    'imdb': '8.8/10',
+    'rotten_tomatoes': '87%',
+    'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
+    'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
+    'comment': 'اینسپشن، اثری علمی-تخیلی از نولان، با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازی دی‌کاپریو و کارگردانی بی‌نقص، فیلم را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست که ممکن است برای همه جذاب نباشد. اگر فیلم‌های فکری دوست دارید، اینسپشن را ببینید!',
+    'rating': 4,
+    'special': True
+}
+
 # --- توابع کمکی ---
 def clean_text(text):
     """پاکسازی متن برای MarkdownV2"""
@@ -63,9 +77,13 @@ async def get_movie_info(title):
                     logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
                     tmdb_plot = ""
                     movie_id = None
+                    tmdb_title = title
+                    tmdb_year = 'N/A'
                 else:
                     tmdb_plot = tmdb_data['results'][0].get('overview', '')
                     movie_id = tmdb_data['results'][0].get('id')
+                    tmdb_title = tmdb_data['results'][0].get('title', title)
+                    tmdb_year = tmdb_data['results'][0].get('release_date', 'N/A')[:4]
                 
                 trailer = "N/A"
                 if movie_id:
@@ -105,8 +123,8 @@ async def get_movie_info(title):
             
             # اطلاعات نهایی
             info = {
-                'title': omdb_data.get('Title', title) if omdb_data else title,
-                'year': omdb_data.get('Year', 'N/A') if omdb_data else 'N/A',
+                'title': omdb_data.get('Title', tmdb_title) if omdb_data else tmdb_title,
+                'year': omdb_data.get('Year', tmdb_year) if omdb_data else tmdb_year,
                 'plot': plot,
                 'imdb': omdb_data.get('imdbRating', 'N/A') + '/10' if omdb_data and omdb_data.get('imdbRating') else 'N/A',
                 'rotten_tomatoes': next(
@@ -206,8 +224,8 @@ async def get_random_movie(max_retries=3):
                 await fetch_movies_to_cache()
             
             if not cached_movies:
-                logger.error("هیچ فیلمی در کش موجود نیست")
-                return None
+                logger.error("هیچ فیلمی در کش موجود نیست، استفاده از فال‌بک")
+                return FALLBACK_MOVIE
             
             movie = random.choice(cached_movies)
             logger.info(f"فیلم انتخاب شد: {movie['title']} (تلاش {attempt + 1})")
@@ -239,10 +257,11 @@ async def get_random_movie(max_retries=3):
         except Exception as e:
             logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
             if attempt == max_retries - 1:
-                logger.error("تلاش‌ها تمام شد، فیلم یافت نشد")
-                return None
+                logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
+                return FALLBACK_MOVIE
             continue
-    return None
+    logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
+    return FALLBACK_MOVIE
 
 def format_movie_post(movie):
     """فرمت پست دقیقاً مثل نمونه درخواستی"""
@@ -403,18 +422,18 @@ async def run_bot():
     job_queue = app.job_queue
     if job_queue:
         logger.info("JobQueue فعال شد")
-        job_queue.run_repeating(auto_post, interval=3600, first=10)  # هر ساعت
+        job_queue.run_repeating(auto_post, interval=7200, first=10)  # هر 2 ساعت
     else:
         logger.error("JobQueue فعال نشد")
         await app.bot.send_message(ADMIN_ID, "❌ خطا: JobQueue فعال نشد")
     
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_polling(drop_pending_updates=True)
     return app
 
 async def run_web():
-    """راه‌اندازی سرور وب برای Render"""
+    """راه Ascoltare il web server per Render"""
     logger.info("شروع راه‌اندازی سرور وب...")
     app = web.Application()
     app.router.add_get('/health', health_check)
