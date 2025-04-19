@@ -1,6 +1,7 @@
 import telegram
 import asyncio
 import os
+import json
 import logging
 import aiohttp
 import random
@@ -16,7 +17,6 @@ from openai import AsyncOpenAI
 import aiohttp.client_exceptions
 import re
 import certifi
-import json
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -32,6 +32,7 @@ ADMIN_ID = os.getenv('ADMIN_ID')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 POST_INTERVAL = int(os.getenv('POST_INTERVAL', 600))
@@ -54,6 +55,7 @@ last_fetch_time = datetime.now() - timedelta(days=1)
 previous_plots = []
 previous_comments = []
 gemini_available = True
+deepseek_available = True
 openai_available = True
 bot_enabled = True
 CACHE_FILE = "movie_cache.json"
@@ -82,26 +84,79 @@ GENRE_TRANSLATIONS = {
     'Unknown': 'سایر'
 }
 
-# --- فال‌بک‌ها ---
+# --- فال‌بک‌های گسترده‌تر ---
+FALLBACK_MOVIES = [
+    {
+        'title': 'Inception',
+        'year': '2010',
+        'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند.',
+        'imdb': '8.8/10',
+        'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'هیجان_انگیز']
+    },
+    {
+        'title': 'The Matrix',
+        'year': '1999',
+        'plot': 'هکری که دنیایی شبیه‌سازی‌شده را کشف می‌کند، باید علیه ماشین‌هایی که بشریت را زندانی کرده‌اند بجنگد.',
+        'imdb': '8.7/10',
+        'trailer': 'https://www.youtube.com/watch?v=m8e-FF8MsWU',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BNzQzOTk3OTAtNDQ0Zi00ZTVkLWI0MTEtMDllZjNkYzNjNTc4L2ltYWdlXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'اکشن']
+    },
+    {
+        'title': 'The Shawshank Redemption',
+        'year': '1994',
+        'plot': 'مردی بی‌گناه به زندان می‌افتد و دوستی عمیقی با یک زندانی دیگر شکل می‌دهد. آیا امیدی برای آزادی وجود دارد؟',
+        'imdb': '9.3/10',
+        'trailer': 'https://www.youtube.com/watch?v=6hB3S9bIaco',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMDFkYTc0MGEtZmNhMC00ZDIzLWFmNTEtODM1ZmRlYWMwMWFmXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg',
+        'genres': ['درام']
+    },
+    {
+        'title': 'Interstellar',
+        'year': '2014',
+        'plot': 'گروهی از فضانوردان برای یافتن خانه‌ای جدید برای بشریت به سفری بین‌ستاره‌ای می‌روند. آیا موفق خواهند شد؟',
+        'imdb': '8.6/10',
+        'trailer': 'https://www.youtube.com/watch?v=zSWdZVtXT7E',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGYyLWFhMjktYzk2ODVhZmM0YzkxXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'درام']
+    },
+    {
+        'title': 'Fight Club',
+        'year': '1999',
+        'plot': 'مردی ناامید باشگاهی مخفی برای مبارزه راه می‌اندازد، اما همه‌چیز از کنترل خارج می‌شود.',
+        'imdb': '8.8/10',
+        'trailer': 'https://www.youtube.com/watch?v=SUXWAEX2jlg',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMmEzNTkxYjQtZTc0MC00YTVjLTg5ZTEtZWMwOWVlYzY0NWIwXkEyXkFqcGdeQXVyNzkwMjQ5NzM@._V1_SX300.jpg',
+        'genres': ['درام', 'هیجان_انگیز']
+    }
+]
+
 FALLBACK_PLOTS = {
     'اکشن': [
         "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟",
         "داستانی پر از تعقیب و گریز و انفجارهای مهیج. قهرمانی که برای عدالت می‌جنگد. آیا او پیروز خواهد شد؟",
+        "مبارزه‌ای حماسی برای نجات بشریت. صحنه‌های اکشن خیره‌کننده و داستانی پرتعلیق. آیا پایان خوشی در انتظار است؟",
     ],
     'درام': [
         "داستانی عمیق از روابط انسانی و انتخاب‌های سخت. زندگی شخصیتی پیچیده که قلب شما را لمس می‌کند. آیا او راه خود را پیدا خواهد کرد؟",
         "روایتی احساسی از چالش‌های زندگی و عشق. تصمیم‌هایی که آینده را تغییر می‌دهند. آیا پایان خوشی در انتظار است؟",
+        "سفری احساسی در دل مشکلات زندگی. شخصیت‌هایی که با شجاعت مبارزه می‌کنند. آیا امید پیروز می‌شود؟",
     ],
     'کمدی': [
         "ماجراهای خنده‌داری که زندگی را زیرورو می‌کنند. گروهی از دوستان که در موقعیت‌های عجیب گیر می‌افتند. آیا از این مخمصه خلاص می‌شوند؟",
         "داستانی پر از شوخی و موقعیت‌های بامزه. شخصیت‌هایی که شما را به خنده می‌اندازند. آیا همه‌چیز به خیر می‌گذرد؟",
+        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. ماجراهایی که خنده را به لب‌هایتان می‌آورد. آیا پایان شادی در انتظار است؟",
     ],
     'علمی_تخیلی': [
         "جهانی در آینده که تکنولوژی همه‌چیز را تغییر داده. ماجراجویی‌ای برای کشف حقیقت پشت یک راز بزرگ. آیا بشریت نجات پیدا می‌کند؟",
         "داستانی از سفر در زمان و فضا. اکتشافاتی که جهان را دگرگون می‌کنند. آیا حقیقت آشکار خواهد شد؟",
+        "ماجراجویی‌ای در فضایی ناشناخته. فناوری‌های عجیب و داستانی پیچیده. آیا قهرمانان موفق می‌شوند؟",
     ],
     'سایر': [
         "داستانی جذاب که شما را به سفری غیرمنتظره می‌برد. شخصیت‌هایی که با چالش‌های بزرگ روبرو می‌شوند. آیا پایان خوشی در انتظار است؟",
+        "روایتی متفاوت که شما را غافلگیر می‌کند. ماجراهایی که قلب و ذهن را درگیر می‌کنند. آیا همه‌چیز درست می‌شود؟",
     ]
 }
 
@@ -109,41 +164,34 @@ FALLBACK_COMMENTS = {
     'اکشن': [
         "این فیلم با صحنه‌های اکشن نفس‌گیر و داستان پرهیجان، شما را به صندلی میخکوب می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده از نقاط قوت آن است. فقط گاهی ریتم تند ممکن است کمی گیج‌کننده باشد.",
         "فیلمی پر از هیجان و صحنه‌های اکشن تماشایی. داستان سرگرم‌کننده و بازیگری قوی، آن را جذاب کرده است. فقط برخی لحظات ممکن است قابل پیش‌بینی باشند.",
+        "اکشنی پرشور با داستانی مهیج که شما را تا آخر نگه می‌دارد. جلوه‌های ویژه عالی هستند. فقط برخی دیالوگ‌ها می‌توانستند قوی‌تر باشند.",
     ],
     'درام': [
         "این فیلم با داستانی عمیق و احساسی، قلب شما را تسخیر می‌کند. بازیگری بی‌نقص و کارگردانی حساس، آن را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
         "روایتی تکان‌دهنده از زندگی و احساسات انسانی. فیلم‌برداری زیبا و موسیقی متن تأثیرگذار، آن را خاص کرده‌اند. فقط پایان ممکن است برای همه رضایت‌بخش نباشد.",
+        "داستانی احساسی که شما را به فکر فرو می‌برد. شخصیت‌پردازی قوی و کارگردانی هنرمندانه از نقاط قوت آن است. فقط برخی لحظات ممکن است بیش از حد طولانی باشند.",
     ],
     'کمدی': [
         "این فیلم با شوخی‌های بامزه و داستان سرگرم‌کننده، شما را به خنده می‌اندازد. بازیگران شیمی فوق‌العاده‌ای دارند و کارگردانی پرانرژی است. فقط برخی جوک‌ها ممکن است تکراری به نظر برسند.",
         "داستانی سبک و خنده‌دار که حال شما را خوب می‌کند. شخصیت‌پردازی قوی و دیالوگ‌های هوشمندانه از نقاط قوت آن است. فقط ریتم در برخی صحنه‌ها افت می‌کند.",
+        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. بازیگران فوق‌العاده و داستان بامزه از نقاط قوت آن است. فقط برخی شوخی‌ها ممکن است به مذاق همه خوش نیاید.",
     ],
     'علمی_تخیلی': [
         "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به دنیایی دیگر می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی از نقاط قوت آن است. فقط برخی مفاهیم ممکن است پیچیده باشند.",
         "جهانی فانتزی که با داستان‌سرایی قوی شما را مجذوب می‌کند. تکنولوژی‌های تخیلی و کارگردانی خلاقانه، آن را دیدنی کرده‌اند. فقط برخی جزئیات ممکن است گنگ باشند.",
+        "داستانی علمی‌تخیلی که ذهن شما را به چالش می‌کشد. جلوه‌های ویژه و داستان‌سرایی خلاقانه از نقاط قوت آن است. فقط ممکن است برای همه قابل فهم نباشد.",
     ],
     'سایر': [
         "فیلمی که با داستان‌سرایی جذاب و کارگردانی قوی، شما را سرگرم می‌کند. بازیگری خوب و روایت روان از نقاط قوت آن است. فقط برخی لحظات ممکن است کند باشند.",
+        "داستانی متفاوت که شما را غافلگیر می‌کند. کارگردانی هنرمندانه و بازیگری قوی، آن را دیدنی کرده‌اند. فقط برخی صحنه‌ها ممکن است طولانی به نظر برسند.",
     ]
-}
-
-FALLBACK_MOVIE = {
-    'title': 'Inception',
-    'year': '2010',
-    'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند.',
-    'imdb': '8.8/10',
-    'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
-    'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
-    'comment': 'این فیلم اثری جذاب در ژانر علمی_تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست.',
-    'rating': 4,
-    'special': True,
-    'genres': ['علمی_تخیلی', 'هیجان_انگیز']
 }
 
 # --- شمارشگر خطاهای API ---
 api_errors = {
     'tmdb': 0,
-    'omdb': 0
+    'omdb': 0,
+    'deepseek': 0
 }
 
 # --- توابع کمکی ---
@@ -175,14 +223,14 @@ def get_fallback_by_genre(options, genres):
     available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
     return random.choice(available) if available else options['سایر'][0]
 
-async def make_api_request(url, retries=5, timeout=15):
+async def make_api_request(url, retries=5, timeout=15, headers=None):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
-                async with session.get(url) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2 ** attempt)
                         continue
                     if response.status == 401:
                         logger.error(f"خطای 401: کلید API نامعتبر")
@@ -196,17 +244,50 @@ async def make_api_request(url, retries=5, timeout=15):
             logger.error(f"خطای اتصال (تلاش {attempt + 1}): {str(e)}")
             if attempt == retries - 1:
                 return None
-            await asyncio.sleep(3)
+            await asyncio.sleep(2 ** attempt)
         except aiohttp.ClientResponseError as e:
             logger.error(f"خطای پاسخ (تلاش {attempt + 1}): {str(e)}")
             if attempt == retries - 1:
                 return None
-            await asyncio.sleep(3)
+            await asyncio.sleep(2 ** attempt)
         except Exception as e:
             logger.error(f"خطای غیرمنتظره در درخواست API (تلاش {attempt + 1}): {str(e)}")
             if attempt == retries - 1:
                 return None
-            await asyncio.sleep(3)
+            await asyncio.sleep(2 ** attempt)
+    return None
+
+async def post_api_request(url, data, headers, retries=5, timeout=15):
+    for attempt in range(retries):
+        try:
+            async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
+                async with session.post(url, json=data, headers=headers) as response:
+                    if response.status == 429:
+                        logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    if response.status == 401:
+                        logger.error(f"خطای 401: کلید API نامعتبر")
+                        return None
+                    if response.status != 200:
+                        logger.error(f"خطای {response.status}: {await response.text()}")
+                        return None
+                    return await response.json()
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(2 ** attempt)
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"خطای پاسخ (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.error(f"خطای غیرمنتظره در درخواست API (تلاش {attempt + 1}): {str(e)}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(2 ** attempt)
     return None
 
 async def get_imdb_score_tmdb(title):
@@ -264,7 +345,7 @@ async def save_cache_to_file():
         logger.info(f"کش به فایل ذخیره شد: {len(cached_movies)} فیلم")
     except Exception as e:
         logger.error(f"خطا در ذخیره کش به فایل: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در ذخیره کش: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در ذخیره کش: {str(e)}. استفاده از کش موقت در حافظه.")
 
 async def load_cache_from_file():
     global cached_movies
@@ -278,7 +359,7 @@ async def load_cache_from_file():
         return False
     except Exception as e:
         logger.error(f"خطا در لود کش از فایل: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در لود کش: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در لود کش: {str(e)}. استفاده از کش موقت در حافظه.")
         return False
 
 async def save_posted_movies_to_file():
@@ -288,7 +369,7 @@ async def save_posted_movies_to_file():
         logger.info(f"لیست فیلم‌های ارسال‌شده ذخیره شد: {len(posted_movies)} فیلم")
     except Exception as e:
         logger.error(f"خطا در ذخیره فیلم‌های ارسال‌شده: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در ذخیره فیلم‌های ارسال‌شده: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در ذخیره فیلم‌های ارسال‌شده: {str(e)}. استفاده از لیست موقت در حافظه.")
 
 async def load_posted_movies_from_file():
     global posted_movies
@@ -302,7 +383,7 @@ async def load_posted_movies_from_file():
         return False
     except Exception as e:
         logger.error(f"خطا در لود فیلم‌های ارسال‌شده: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در لود فیلم‌های ارسال‌شده: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در لود فیلم‌های ارسال‌شده: {str(e)}. استفاده از لیست موقت در حافظه.")
         return False
 
 async def get_movie_info(title):
@@ -376,13 +457,14 @@ async def get_movie_info(title):
     
     logger.error(f"هیچ API برای {title} جواب نداد")
     if api_errors['tmdb'] > 5 or api_errors['omdb'] > 5:
-        await send_admin_alert(None, f"⚠️ هشدار: APIهای متعدد ({api_errors}) خطا دارند. لطفاً بررسی کنید.")
-    return FALLBACK_MOVIE
+        await send_admin_alert(None, f"⚠️ هشدار: APIهای متعدد ({api_errors}) خطا دارند. لطفاً کلیدهای TMDB و OMDb را بررسی کنید.")
+    return random.choice(FALLBACK_MOVIES)
 
 async def generate_comment(genres):
-    global gemini_available, openai_available
+    global gemini_available, deepseek_available, openai_available
     logger.info("تولید تحلیل...")
     
+    # 1. Gemini
     if gemini_available:
         max_attempts = 2
         for attempt in range(max_attempts):
@@ -401,14 +483,58 @@ async def generate_comment(genres):
             except google_exceptions.ResourceExhausted as e:
                 logger.error(f"خطا: توکن Gemini تمام شده است: {str(e)}")
                 gemini_available = False
-                await send_admin_alert(None, "❌ توکن Gemini تمام شده است. تلاش با Open AI...")
+                await send_admin_alert(None, "❌ توکن Gemini تمام شده است. تلاش با DeepSeek...")
             except google_exceptions.ClientError as e:
                 logger.error(f"خطای کلاینت Gemini (تلاش {attempt + 1}): {str(e)}")
             except Exception as e:
                 logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
     
+    # 2. DeepSeek
+    if deepseek_available:
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                url = "https://api.deepseek.com/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": "You are a professional film critic writing in Persian."},
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.7
+                }
+                response = await post_api_request(url, data, headers)
+                if response and response.get('choices'):
+                    text = response['choices'][0]['message']['content'].strip()
+                    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+                    if len(sentences) >= 3 and is_farsi(text) and len(text.split()) > 15:
+                        previous_comments.append(text)
+                        if len(previous_comments) > 10:
+                            previous_comments.pop(0)
+                        return '. '.join(sentences[:3]) + '.'
+                logger.warning(f"تحلیل DeepSeek نامعتبر (تلاش {attempt + 1}): {response}")
+            except aiohttp.client_exceptions.ClientConnectorError as e:
+                logger.error(f"خطای اتصال DeepSeek (تلاش {attempt + 1}): {str(e)}")
+                api_errors['deepseek'] += 1
+                if attempt == max_attempts - 1:
+                    deepseek_available = False
+                    await send_admin_alert(None, f"❌ مشکل اتصال به DeepSeek: {str(e)}. تلاش با Open AI...")
+            except Exception as e:
+                logger.error(f"خطا در DeepSeek API (تلاش {attempt + 1}): {str(e)}")
+                api_errors['deepseek'] += 1
+                if attempt == max_attempts - 1:
+                    deepseek_available = False
+                    await send_admin_alert(None, f"❌ خطا در DeepSeek: {str(e)}. تلاش با Open AI...")
+            await asyncio.sleep(2 ** attempt)
+    
+    # 3. Open AI
     if openai_available:
-        for attempt in range(5):
+        for attempt in range(7):
             try:
                 response = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -430,17 +556,18 @@ async def generate_comment(genres):
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
             except aiohttp.client_exceptions.ClientConnectorError as e:
                 logger.error(f"خطای اتصال Open AI (تلاش {attempt + 1}): {str(e)}")
-                if attempt == 4:
+                if attempt == 6:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. فقط از Gemini استفاده می‌شود.")
-                await asyncio.sleep(2 ** attempt)  # تأخیر تصاعدی
+                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. استفاده از فال‌بک.")
+                await asyncio.sleep(2 ** attempt)
             except Exception as e:
                 logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
-                if attempt == 4:
+                if attempt == 6:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. فقط از Gemini استفاده می‌شود.")
+                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. استفاده از فال‌بک.")
                 await asyncio.sleep(2 ** attempt)
     
+    # 4. فال‌بک
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
     comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
     previous_comments.append(comment)
@@ -464,7 +591,7 @@ async def fetch_movies_to_cache():
     global cached_movies, last_fetch_time
     logger.info("شروع آپدیت کش فیلم‌ها...")
     new_movies = []
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
                 page = 1
@@ -479,7 +606,7 @@ async def fetch_movies_to_cache():
                                 m.get('original_language') != 'hi' and
                                 'IN' not in m.get('origin_country', []) and
                                 m.get('poster_path')):
-                                imdb_score = await get_imdb_score_omdb(m['title']) or await get_imdb_score_tmdb(m['title'])
+                                imdb_score = await get_imdb_score_tmdb(m['title'])
                                 if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
                                     new_movies.append({'title': m['title'], 'id': str(m['id'])})
                         page += 1
@@ -504,12 +631,12 @@ async def fetch_movies_to_cache():
                 logger.error("داده‌ای از هیچ API دریافت نشد")
         except Exception as e:
             logger.error(f"خطا در آپدیت کش (تلاش {attempt + 1}): {str(e)}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2 ** attempt)
     
     logger.error("تلاش‌ها برای آپدیت کش ناموفق بود، لود از فایل")
     if await load_cache_from_file():
         return True
-    cached_movies = [{'title': 'Inception', 'id': 'tt1375666'}, {'title': 'The Matrix', 'id': 'tt0133093'}]
+    cached_movies = [{'title': m['title'], 'id': m['title']} for m in FALLBACK_MOVIES]
     await save_cache_to_file()
     last_fetch_time = datetime.now()
     await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد، استفاده از فال‌بک")
@@ -523,7 +650,7 @@ async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
         logger.error("خطا در آپدیت خودکار کش")
         await send_admin_alert(context, "❌ خطا در آپدیت خودکار کش")
 
-async def get_random_movie(max_retries=3):
+async def get_random_movie(max_retries=5):
     logger.info("انتخاب فیلم تصادفی...")
     for attempt in range(max_retries):
         try:
@@ -533,7 +660,7 @@ async def get_random_movie(max_retries=3):
             
             if not cached_movies:
                 logger.error("هیچ فیلمی در کش موجود نیست، استفاده از فال‌بک")
-                return FALLBACK_MOVIE
+                return random.choice(FALLBACK_MOVIES)
             
             available_movies = [m for m in cached_movies if m['id'] not in posted_movies]
             if not available_movies:
@@ -584,9 +711,9 @@ async def get_random_movie(max_retries=3):
             logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
             if attempt == max_retries - 1:
                 logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
-                return FALLBACK_MOVIE
+                return random.choice(FALLBACK_MOVIES)
     logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
-    return FALLBACK_MOVIE
+    return random.choice(FALLBACK_MOVIES)
 
 def format_movie_post(movie):
     stars = '⭐️' * movie['rating']
@@ -799,6 +926,30 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در تست Gemini: {str(e)}")
         results.append(f"❌ Gemini خطا: {str(e)}")
 
+    # تست DeepSeek
+    try:
+        url = "https://api.deepseek.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": "Write in Persian."},
+                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+            ],
+            "max_tokens": 50,
+            "temperature": 0.7
+        }
+        response = await post_api_request(url, data, headers)
+        text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
+        deepseek_status = "✅ DeepSeek اوکی" if text and is_farsi(text) else f"❌ DeepSeek خطا: پاسخ نامعتبر"
+        results.append(deepseek_status)
+    except Exception as e:
+        logger.error(f"خطا در تست DeepSeek: {str(e)}")
+        results.append(f"❌ DeepSeek خطا: {str(e)}")
+
     # تست Open AI
     try:
         response = await client.chat.completions.create(
@@ -843,7 +994,7 @@ async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 if not data.get('ok'):
                     raise Exception(f"خطا در API تلگرام: {data.get('description')}")
                 if data['result']['status'] not in ['administrator', 'creator']:
-                    raise Exception("بات ادمین کانال نیست.")
+                    raise Exception("بات ادمین کانال نیست یا CHANNEL_ID اشتباه است.")
         await msg.edit_text("✅ دسترسی به کانال اوکی", reply_markup=get_tests_menu())
     except Exception as e:
         logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
@@ -857,14 +1008,14 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if not CHANNEL_ID:
-            raise Exception("CHANNEL_ID تنظیم نشده است.")
+            raise Exception("CHANNEL_ID تنظیم نشده است. لطفاً CHANNEL_ID را در فایل .env بررسی کنید.")
         
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
             async with session.get(url) as response:
                 data = await response.json()
                 if not data.get('ok') or data['result']['status'] not in ['administrator', 'creator']:
-                    raise Exception("بات ادمین کانال نیست یا CHANNEL_ID اشتباه است.")
+                    raise Exception("بات ادمین کانال نیست یا CHANNEL_ID اشتباه است. لطفاً مطمئن شوید که ربات ادمین است و CHANNEL_ID به شکل @channelname یا -1001234567890 تنظیم شده.")
         
         now = datetime.now()
         views_week = []
