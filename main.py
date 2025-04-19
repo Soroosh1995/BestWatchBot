@@ -60,54 +60,57 @@ def is_farsi(text):
     return bool(re.search(farsi_chars, text))
 
 async def get_movie_info(title):
-    """دریافت اطلاعات فیلم فقط از TMDB"""
+    """دریافت اطلاعات فیلم فقط از TMDB با عنوان و پوستر انگلیسی"""
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
-            # جستجو در TMDB
-            search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
-            async with session.get(search_url) as tmdb_response:
-                tmdb_data = await tmdb_response.json()
-                if not tmdb_data.get('results'):
-                    logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
+            # جستجو برای عنوان انگلیسی
+            search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=en-US"
+            async with session.get(search_url_en) as tmdb_response_en:
+                tmdb_data_en = await tmdb_response_en.json()
+                if not tmdb_data_en.get('results'):
+                    logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} (انگلیسی) نداد")
                     return None
-                
-                movie = tmdb_data['results'][0]
+                movie = tmdb_data_en['results'][0]
                 movie_id = movie.get('id')
                 tmdb_title = movie.get('title', title)
-                tmdb_year = movie.get('release_date', 'N/A')[:4]
-                tmdb_plot = movie.get('overview', '')
                 tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else 'N/A'
-                
-                # دریافت تریلر
-                trailer = "N/A"
-                if movie_id:
-                    videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                    async with session.get(videos_url) as videos_response:
-                        videos_data = await videos_response.json()
-                        if videos_data.get('results'):
-                            for video in videos_data['results']:
-                                if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                    trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                    break
+            
+            # جستجو برای اطلاعات فارسی (خلاصه، سال)
+            search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
+            async with session.get(search_url_fa) as tmdb_response_fa:
+                tmdb_data_fa = await tmdb_response_fa.json()
+                tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
+                tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
+            
+            # دریافت تریلر
+            trailer = "N/A"
+            if movie_id:
+                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
+                async with session.get(videos_url) as videos_response:
+                    videos_data = await videos_response.json()
+                    if videos_data.get('results'):
+                        for video in videos_data['results']:
+                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                break
             
             # انتخاب خلاصه داستان
             plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
             logger.info(f"خلاصه {'فارسی از TMDB' if tmdb_plot else 'فال‌بک'} برای {title}")
             
-            # دریافت امتیاز IMDB از جزئیات فیلم
+            # دریافت امتیاز IMDB
             details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=fa-IR"
             async with session.get(details_url) as details_response:
                 details_data = await details_response.json()
-                imdb_score = str(details_data.get('vote_average', 'N/A'))
-                imdb = f"{imdb_score}/10" if imdb_score != 'N/A' else 'N/A'
+                imdb_score = str(round(details_data.get('vote_average', 0), 1))
+                imdb = f"{imdb_score}/10" if imdb_score != '0' else 'N/A'
             
             return {
                 'title': tmdb_title,
                 'year': tmdb_year,
                 'plot': plot,
                 'imdb': imdb,
-                'rotten_tomatoes': 'N/A',  # TMDB این اطلاعات رو نداره
                 'trailer': trailer,
                 'poster': tmdb_poster
             }
@@ -174,7 +177,7 @@ async def get_random_movie(max_retries=3):
                 logger.warning(f"اطلاعات فیلم {movie['title']} دریافت نشد، تلاش مجدد...")
                 continue
             
-            comment = await generate_comment(movie['title'])
+            comment = await generate_comment(movie_info['title'])  # استفاده از عنوان انگلیسی
             imdb_score = float(movie_info['imdb'].split('/')[0]) if movie_info['imdb'] != 'N/A' else 0
             
             if imdb_score >= 9.0:
@@ -204,7 +207,7 @@ async def get_random_movie(max_retries=3):
     return FALLBACK_MOVIE
 
 def format_movie_post(movie):
-    """فرمت پست با تگ HTML مثل دیپ‌سیک"""
+    """فرمت پست با تگ HTML مثل دیپ‌سیک بدون Rotten Tomatoes"""
     stars = '⭐️' * movie['rating']
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
@@ -219,7 +222,6 @@ def format_movie_post(movie):
 
 🌟 <b>امتیاز:</b>
 <b>IMDB: {clean_text(movie['imdb'])}</b>
-<b>Rotten Tomatoes: {clean_text(movie['rotten_tomatoes'])}</b>
 
 🎞 <b>لینک تریلر:</b>
 {clean_text(movie['trailer'])}
