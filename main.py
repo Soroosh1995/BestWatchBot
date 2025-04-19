@@ -63,8 +63,8 @@ GENRE_TRANSLATIONS = {
     'Music': 'موسیقی',
     'Mystery': 'رازآلود',
     'Romance': 'عاشقانه',
-    'Science Fiction': 'علمی-تخیلی',
-    'Thriller': 'هیجان‌انگیز',
+    'Science Fiction': 'علمی_تخیلی',
+    'Thriller': 'هیجان_انگیز',
     'War': 'جنگی',
     'Western': 'وسترن'
 }
@@ -73,38 +73,30 @@ GENRE_TRANSLATIONS = {
 FALLBACK_PLOTS = {
     'اکشن': [
         "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟",
-        # ... بقیه فال‌بک‌ها مشابه کد قبلی
     ],
     'درام': [
         "داستانی عمیق از روابط انسانی و انتخاب‌های سخت. زندگی شخصیتی پیچیده که قلب شما را لمس می‌کند. آیا او راه خود را پیدا خواهد کرد؟",
-        # ...
     ],
     'کمدی': [
         "ماجراهای خنده‌داری که زندگی را زیرورو می‌کنند. گروهی از دوستان که در موقعیت‌های عجیب گیر می‌افتند. آیا از این مخمصه خلاص می‌شوند؟",
-        # ...
     ],
-    'علمی-تخیلی': [
+    'علمی_تخیلی': [
         "جهانی در آینده که تکنولوژی همه‌چیز را تغییر داده. ماجراجویی‌ای برای کشف حقیقت پشت یک راز بزرگ. آیا بشریت نجات پیدا می‌کند؟",
-        # ...
     ]
 }
 
 FALLBACK_COMMENTS = {
     'اکشن': [
         "این فیلم با صحنه‌های اکشن نفس‌گیر و داستان پرهیجان، شما را به صندلی میخکوب می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده از نقاط قوت آن است. فقط گاهی ریتم تند ممکن است کمی گیج‌کننده باشد.",
-        # ...
     ],
     'درام': [
         "این فیلم با داستانی عمیق و احساسی، قلب شما را تسخیر می‌کند. بازیگری بی‌نقص و کارگردانی حساس، آن را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
-        # ...
     ],
     'کمدی': [
         "این فیلم با شوخی‌های بامزه و داستان سرگرم‌کننده، شما را به خنده می‌اندازد. بازیگران شیمی فوق‌العاده‌ای دارند و کارگردانی پرانرژی است. فقط برخی جوک‌ها ممکن است تکراری به نظر برسند.",
-        # ...
     ],
-    'علمی-تخیلی': [
+    'علمی_تخیلی': [
         "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به دنیایی دیگر می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی از نقاط قوت آن است. فقط برخی مفاهیم ممکن است پیچیده باشند.",
-        # ...
     ]
 }
 
@@ -115,10 +107,10 @@ FALLBACK_MOVIE = {
     'imdb': '8.8/10',
     'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
     'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
-    'comment': 'این فیلم اثری جذاب در ژانر علمی-تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست.',
+    'comment': 'این فیلم اثری جذاب در ژانر علمی_تخیلی است که با داستانی پیچیده و جلوه‌های بصری خیره‌کننده، ذهن را به چالش می‌کشد. بازیگری و کارگردانی بی‌نقص، آن را فراموش‌نشدنی کرده‌اند. تنها ضعف، ریتم کند برخی صحنه‌هاست.',
     'rating': 4,
     'special': True,
-    'genres': ['علمی-تخیلی', 'هیجان‌انگیز']
+    'genres': ['علمی_تخیلی', 'هیجان_انگیز']
 }
 
 # --- حالت‌های ConversationHandler ---
@@ -169,36 +161,34 @@ async def get_movie_info(title):
                 tmdb_title = movie.get('title', title)
                 tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
             
+            details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
+            async with session.get(details_url) as details_response:
+                details_data = await details_response.json()
+                original_language = details_data.get('original_language', 'en')
+                imdb_score = details_data.get('vote_average', 0)
+                if imdb_score < 6.0:
+                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+                    return None
+                imdb = f"{imdb_score:.1f}/10"  # دقیقاً همون امتیاز TMDB
+                genres = []
+                for genre in details_data.get('genres', []):
+                    genre_name = genre['name']
+                    genres.append(GENRE_TRANSLATIONS.get(genre_name, genre_name))
+            
             search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
             async with session.get(search_url_fa) as tmdb_response_fa:
                 tmdb_data_fa = await tmdb_response_fa.json()
                 tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
                 tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
             
-            details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
-            async with session.get(details_url) as details_response:
-                details_data = await details_response.json()
-                imdb_score = details_data.get('vote_average', 0)
-                if imdb_score < 6.0:
-                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
-                    return None
-                imdb = f"{round(imdb_score, 1)}/10"
-                genres = []
-                for genre in details_data.get('genres', []):
-                    genre_name = genre['name']
-                    genres.append(GENRE_TRANSLATIONS.get(genre_name, genre_name))
-            
             trailer = None
-            for lang in ['', '&language=en-US', '&language=fa-IR']:
-                videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}{lang}"
-                async with session.get(videos_url) as videos_response:
-                    videos_data = await videos_response.json()
-                    if videos_data.get('results'):
-                        for video in videos_data['results']:
-                            if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                break
-                        if trailer:
+            videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}&language={original_language}"
+            async with session.get(videos_url) as videos_response:
+                videos_data = await videos_response.json()
+                if videos_data.get('results'):
+                    for video in videos_data['results']:
+                        if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                            trailer = f"https://www.youtube.com/watch?v={video['key']}"
                             break
             
             plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else None
@@ -381,9 +371,9 @@ async def get_random_movie(max_retries=3):
                 rating = 5
             elif 8.0 <= imdb_score < 9.0:
                 rating = 4
-            elif 6.5 <= imdb_score < 8.0:
+            elif 7.0 <= imdb_score < 8.0:
                 rating = 3
-            elif 6.0 <= imdb_score < 6.5:
+            elif 6.0 <= imdb_score < 7.0:
                 rating = 2
             else:
                 rating = 1
@@ -392,7 +382,7 @@ async def get_random_movie(max_retries=3):
                 **movie_info,
                 'comment': comment,
                 'rating': rating,
-                'special': imdb_score >= 9.5
+                'special': imdb_score >= 9.0
             }
         except Exception as e:
             logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
@@ -407,7 +397,7 @@ def format_movie_post(movie):
     special = ' 👑' if movie['special'] else ''
     channel_link = 'https://t.me/bestwatch_channel'
     rlm = '\u200F'
-    genres = ' '.join([f'#{g.replace(" ", "_")}' for g in movie['genres']]) if movie['genres'] else '#سینمایی'
+    genres = ' '.join([f"#{g.replace(' ', '_')}" for g in movie['genres']]) if movie['genres'] else '#سینمایی'
     
     post_sections = [
         f"""
@@ -472,10 +462,11 @@ def get_main_menu():
 def get_tests_menu():
     keyboard = [
         [
-            InlineKeyboardButton("دسترسی فنی", callback_data='test_all'),
-            InlineKeyboardButton("دسترسی کانال", callback_data='test_channel')
+            InlineKeyboardButton("تست Gemini", callback_data='test_gemini'),
+            InlineKeyboardButton("تست Open AI", callback_data='test_openai')
         ],
         [
+            InlineKeyboardButton("دسترسی کانال", callback_data='test_channel'),
             InlineKeyboardButton("بازگشت", callback_data='back_to_main')
         ]
     ]
@@ -581,33 +572,47 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در post_now: {e}")
         await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
 
-async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def test_gemini_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info("دکمه test_all")
+    logger.info("دکمه test_gemini")
     await query.answer()
-    msg = await query.message.edit_text("در حال تست سرویس‌ها...")
-    results = []
-    
+    msg = await query.message.edit_text("در حال تست Gemini...")
     try:
-        async with aiohttp.ClientSession() as session:
-            tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
-            async with session.get(tmdb_url) as tmdb_res:
-                tmdb_data = await tmdb_res.json()
-                tmdb_status = "✅ TMDB اوکی" if tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
-        results.append(tmdb_status)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = "تست: یک جمله به فارسی بنویس."
+        response = await model.generate_content_async(prompt)
+        text = response.text.strip()
+        if text and is_farsi(text):
+            await msg.edit_text("✅ Gemini اوکی", reply_markup=get_tests_menu())
+        else:
+            await msg.edit_text("❌ Gemini خطا: پاسخ نامعتبر", reply_markup=get_tests_menu())
     except Exception as e:
-        results.append(f"❌ TMDB خطا: {str(e)}")
-    
-    job_queue = context.job_queue
-    results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
-    
+        logger.error(f"خطا در تست Gemini: {str(e)}")
+        await msg.edit_text(f"❌ Gemini خطا: {str(e)}", reply_markup=get_tests_menu())
+
+async def test_openai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه test_openai")
+    await query.answer()
+    msg = await query.message.edit_text("در حال تست Open AI...")
     try:
-        comment = await generate_comment(['درام'])
-        results.append("✅ Gemini/Open AI اوکی" if comment else "❌ Gemini/Open AI خطا: مشکل ناشناخته")
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Write in Persian."},
+                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+            ],
+            max_tokens=50,
+            temperature=0.7
+        )
+        text = response.choices[0].message.content.strip()
+        if text and is_farsi(text):
+            await msg.edit_text("✅ Open AI اوکی", reply_markup=get_tests_menu())
+        else:
+            await msg.edit_text("❌ Open AI خطا: پاسخ نامعتبر", reply_markup=get_tests_menu())
     except Exception as e:
-        results.append(f"❌ Gemini/Open AI خطا: {str(e)}")
-    
-    await msg.edit_text("\n".join(results), reply_markup=get_tests_menu())
+        logger.error(f"خطا در تست Open AI: {str(e)}")
+        await msg.edit_text(f"❌ Open AI خطا: {str(e)}", reply_markup=get_tests_menu())
 
 async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -628,6 +633,14 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await query.message.edit_text("در حال بررسی بازدید کانال...")
     
     try:
+        # چک دسترسی ادمین
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
+            async with session.get(url) as response:
+                data = await response.json()
+                if not data.get('ok') or data['result']['status'] not in ['administrator', 'creator']:
+                    raise Exception("بات ادمین کانال نیست. لطفاً بات را ادمین کنید.")
+        
         now = datetime.now()
         views_24h = []
         views_week = []
@@ -638,7 +651,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with session.get(url) as response:
                 data = await response.json()
                 if not data.get('ok') or not data.get('result'):
-                    raise Exception("هیچ پیامی دریافت نشد. مطمئن شوید بات ادمین کانال است.")
+                    raise Exception("هیچ پیامی دریافت نشد. لطفاً حداقل یک پست در کانال منتشر کنید.")
                 
                 for update in data['result']:
                     if 'channel_post' in update:
@@ -657,7 +670,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             views_month.append(post['views'])
         
         if not views_24h and not views_week and not views_month:
-            raise Exception("هیچ بازدیدی ثبت نشد. لطفاً حداقل یک پست در کانال منتشر کنید.")
+            raise Exception("هیچ پستی در کانال یافت نشد. لطفاً حداقل یک پست منتشر کنید.")
         
         avg_24h = sum(views_24h) / len(views_24h) if views_24h else 0
         avg_week = sum(views_week) / len(views_week) if views_week else 0
@@ -719,7 +732,7 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد", reply_markup=get_main_menu())
         return ConversationHandler.END
     
-    msg = await update.message.reply_text(f"در حال اضافه کردن فیلم {title}...")
+    msg = await update.message.reply_text(f"در حال جستجوی فیلم {title}...")
     logger.info(f"تلاش برای اضافه کردن فیلم: {title}")
     
     try:
@@ -729,18 +742,24 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with session.get(search_url) as response:
                 data = await response.json()
                 logger.info(f"پاسخ TMDB برای {title}: {data}")
-                if 'results' not in data or not data['results']:
+                if not data.get('results'):
                     await msg.edit_text(f"❌ فیلم {title} یافت نشد", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
                 movie = data['results'][0]
-                if (movie.get('original_language') == 'hi' or
-                    'IN' in movie.get('origin_country', []) or
-                    movie.get('vote_average', 0) < 6.0):
-                    await msg.edit_text(f"❌ فیلم {title} شرایط (غیر هندی، امتیاز >= 6) را ندارد", reply_markup=get_main_menu())
+                movie_id = movie.get('id')
+                vote_average = movie.get('vote_average', 0)
+                original_language = movie.get('original_language', '')
+                origin_country = movie.get('origin_country', [])
+                
+                if original_language == 'hi' or 'IN' in origin_country:
+                    await msg.edit_text(f"❌ فیلم {title} هندی است و مجاز نیست", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
-                movie_id = movie['id']
+                if vote_average < 6.0:
+                    await msg.edit_text(f"❌ فیلم {title} امتیاز {vote_average:.1f} دارد (حداقل 6.0)", reply_markup=get_main_menu())
+                    return ConversationHandler.END
+                
                 if movie_id in [m['id'] for m in cached_movies]:
                     await msg.edit_text(f"❌ فیلم {title} در لیست موجود است", reply_markup=get_main_menu())
                     return ConversationHandler.END
@@ -831,7 +850,8 @@ async def run_bot():
     app.add_handler(CallbackQueryHandler(tests_menu, pattern='^tests_menu$'))
     app.add_handler(CallbackQueryHandler(fetch_movies_handler, pattern='^fetch_movies$'))
     app.add_handler(CallbackQueryHandler(post_now_handler, pattern='^post_now$'))
-    app.add_handler(CallbackQueryHandler(test_all_handler, pattern='^test_all$'))
+    app.add_handler(CallbackQueryHandler(test_gemini_handler, pattern='^test_gemini$'))
+    app.add_handler(CallbackQueryHandler(test_openai_handler, pattern='^test_openai$'))
     app.add_handler(CallbackQueryHandler(test_channel_handler, pattern='^test_channel$'))
     app.add_handler(CallbackQueryHandler(stats_handler, pattern='^stats$'))
     app.add_handler(CallbackQueryHandler(show_movies_handler, pattern='^show_movies$'))
@@ -870,17 +890,6 @@ async def fallback_scheduler(context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(600)
         if (datetime.now() - last_fetch_time).seconds > 86400:
             await auto_fetch_movies(context)
-
-async def run_web():
-    logger.info("شروع راه‌اندازی سرور وب...")
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    logger.info(f"سرور وب روی پورت {PORT} فعال شد")
-    return runner
 
 async def main():
     logger.info("شروع برنامه...")
