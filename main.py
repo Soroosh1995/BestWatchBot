@@ -169,7 +169,7 @@ async def get_movie_info(title):
                 if imdb_score < 6.0:
                     logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
                     return None
-                imdb = f"{imdb_score:.1f}/10"  # دقیقاً همون امتیاز TMDB
+                imdb = f"{imdb_score:.1f}/10"
                 genres = []
                 for genre in details_data.get('genres', []):
                     genre_name = genre['name']
@@ -220,7 +220,6 @@ async def generate_comment(genres):
     global gemini_available, openai_available
     logger.info("تولید تحلیل...")
     
-    # تلاش با Gemini
     if gemini_available:
         max_attempts = 2
         for attempt in range(max_attempts):
@@ -243,7 +242,6 @@ async def generate_comment(genres):
             except Exception as e:
                 logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
     
-    # تلاش با Open AI
     if openai_available and not gemini_available:
         try:
             response = await client.chat.completions.create(
@@ -268,7 +266,6 @@ async def generate_comment(genres):
             openai_available = False
             await send_admin_alert(None, "❌ توکن Open AI تمام شده است. هیچ تحلیلگر دیگری در دسترس نیست.")
     
-    # فال‌بک نهایی
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
     comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
     previous_comments.append(comment)
@@ -462,11 +459,10 @@ def get_main_menu():
 def get_tests_menu():
     keyboard = [
         [
-            InlineKeyboardButton("تست Gemini", callback_data='test_gemini'),
-            InlineKeyboardButton("تست Open AI", callback_data='test_openai')
+            InlineKeyboardButton("دسترسی فنی", callback_data='test_all'),
+            InlineKeyboardButton("دسترسی کانال", callback_data='test_channel')
         ],
         [
-            InlineKeyboardButton("دسترسی کانال", callback_data='test_channel'),
             InlineKeyboardButton("بازگشت", callback_data='back_to_main')
         ]
     ]
@@ -572,29 +568,37 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در post_now: {e}")
         await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
 
-async def test_gemini_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info("دکمه test_gemini")
+    logger.info("دکمه test_all")
     await query.answer()
-    msg = await query.message.edit_text("در حال تست Gemini...")
+    msg = await query.message.edit_text("در حال تست سرویس‌ها...")
+    results = []
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
+            async with session.get(tmdb_url) as tmdb_res:
+                tmdb_data = await tmdb_res.json()
+                tmdb_status = "✅ TMDB اوکی" if tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
+        results.append(tmdb_status)
+    except Exception as e:
+        results.append(f"❌ TMDB خطا: {str(e)}")
+    
+    job_queue = context.job_queue
+    results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
+    
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = "تست: یک جمله به فارسی بنویس."
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
-        if text and is_farsi(text):
-            await msg.edit_text("✅ Gemini اوکی", reply_markup=get_tests_menu())
-        else:
-            await msg.edit_text("❌ Gemini خطا: پاسخ نامعتبر", reply_markup=get_tests_menu())
+        gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
+        results.append(gemini_status)
     except Exception as e:
         logger.error(f"خطا در تست Gemini: {str(e)}")
-        await msg.edit_text(f"❌ Gemini خطا: {str(e)}", reply_markup=get_tests_menu())
-
-async def test_openai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    logger.info("دکمه test_openai")
-    await query.answer()
-    msg = await query.message.edit_text("در حال تست Open AI...")
+        results.append(f"❌ Gemini خطا: {str(e)}")
+    
     try:
         response = await client.chat.completions.create(
             model="gpt-4",
@@ -606,13 +610,13 @@ async def test_openai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             temperature=0.7
         )
         text = response.choices[0].message.content.strip()
-        if text and is_farsi(text):
-            await msg.edit_text("✅ Open AI اوکی", reply_markup=get_tests_menu())
-        else:
-            await msg.edit_text("❌ Open AI خطا: پاسخ نامعتبر", reply_markup=get_tests_menu())
+        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+        results.append(openai_status)
     except Exception as e:
         logger.error(f"خطا در تست Open AI: {str(e)}")
-        await msg.edit_text(f"❌ Open AI خطا: {str(e)}", reply_markup=get_tests_menu())
+        results.append(f"❌ Open AI خطا: {str(e)}")
+    
+    await msg.edit_text("\n".join(results), reply_markup=get_tests_menu())
 
 async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -633,7 +637,6 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await query.message.edit_text("در حال بررسی بازدید کانال...")
     
     try:
-        # چک دسترسی ادمین
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
             async with session.get(url) as response:
@@ -833,6 +836,17 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
 async def health_check(request):
     return web.Response(text="OK")
 
+async def run_web():
+    logger.info(f"راه‌اندازی سرور وب روی پورت {PORT}...")
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"سرور وب روی پورت {PORT} فعال شد")
+    return runner
+
 async def run_bot():
     logger.info("شروع راه‌اندازی بات تلگرام...")
     try:
@@ -850,8 +864,7 @@ async def run_bot():
     app.add_handler(CallbackQueryHandler(tests_menu, pattern='^tests_menu$'))
     app.add_handler(CallbackQueryHandler(fetch_movies_handler, pattern='^fetch_movies$'))
     app.add_handler(CallbackQueryHandler(post_now_handler, pattern='^post_now$'))
-    app.add_handler(CallbackQueryHandler(test_gemini_handler, pattern='^test_gemini$'))
-    app.add_handler(CallbackQueryHandler(test_openai_handler, pattern='^test_openai$'))
+    app.add_handler(CallbackQueryHandler(test_all_handler, pattern='^test_all$'))
     app.add_handler(CallbackQueryHandler(test_channel_handler, pattern='^test_channel$'))
     app.add_handler(CallbackQueryHandler(stats_handler, pattern='^stats$'))
     app.add_handler(CallbackQueryHandler(show_movies_handler, pattern='^show_movies$'))
