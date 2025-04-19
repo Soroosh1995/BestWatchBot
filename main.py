@@ -30,6 +30,7 @@ ADMIN_ID = os.getenv('ADMIN_ID')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')  # برای IMDB API
 PORT = int(os.getenv('PORT', 8080))
 
 # تنظیم Gemini
@@ -146,10 +147,32 @@ def get_fallback_by_genre(options, genres):
     available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
     return random.choice(available) if available else options[list(options.keys())[0]][0]
 
+async def get_imdb_score(title):
+    logger.info(f"دریافت امتیاز IMDB برای: {title}")
+    try:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=8)) as session:
+            encoded_title = urllib.parse.quote(title)
+            url = f"https://imdb-api.com/en/API/SearchMovie/{RAPIDAPI_KEY}/{encoded_title}"
+            async with session.get(url) as response:
+                data = await response.json()
+                logger.info(f"پاسخ IMDB API برای {title}: {data}")
+                if not data.get('results'):
+                    logger.warning(f"IMDB هیچ نتیجه‌ای برای {title} نداد")
+                    return None
+                movie = data['results'][0]
+                imdb_score = movie.get('imDbRating', '0')
+                if float(imdb_score) < 6.0:
+                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+                    return None
+                return f"{float(imdb_score):.1f}/10"
+    except Exception as e:
+        logger.error(f"خطا در دریافت امتیاز IMDB برای {title}: {str(e)}")
+        return None
+
 async def get_movie_info(title):
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=8)) as session:
             encoded_title = urllib.parse.quote(title)
             search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
             async with session.get(search_url_en) as tmdb_response_en:
@@ -167,12 +190,6 @@ async def get_movie_info(title):
             async with session.get(details_url) as details_response:
                 details_data = await details_response.json()
                 original_language = details_data.get('original_language', 'en')
-                imdb_score = details_data.get('vote_average', 0)
-                logger.info(f"امتیاز خام TMDB برای {title}: {imdb_score}")
-                if imdb_score < 6.0:
-                    logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
-                    return None
-                imdb = f"{imdb_score:.1f}/10"
                 genres = []
                 for genre in details_data.get('genres', []):
                     genre_name = genre['name']
@@ -193,6 +210,11 @@ async def get_movie_info(title):
                         if video['type'] == 'Trailer' and video['site'] == 'YouTube':
                             trailer = f"https://www.youtube.com/watch?v={video['key']}"
                             break
+            
+            imdb = await get_imdb_score(tmdb_title)
+            if not imdb:
+                logger.warning(f"امتیاز IMDB برای {tmdb_title} یافت نشد")
+                return None
             
             plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else None
             if not plot or not is_valid_plot(plot):
@@ -265,11 +287,16 @@ async def generate_comment(genres):
                         previous_comments.pop(0)
                     return '. '.join(sentences[:3]) + '.'
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
+            except aiohttp.client_exceptions.ClientConnectorError as e:
+                logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): Connection error - {str(e)}")
+                if attempt == 2:
+                    openai_available = False
+                    await send_admin_alert(None, "❌ مشکل اتصال به Open AI. هیچ تحلیلگر دیگری در دسترس نیست.")
             except Exception as e:
                 logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
                 if attempt == 2:
                     openai_available = False
-                    await send_admin_alert(None, "❌ توکن Open AI تمام شده یا مشکل اتصال. هیچ تحلیلگر دیگری در دسترس نیست.")
+                    await send_admin_alert(None, "❌ خطا در Open AI: {str(e)}")
             await asyncio.sleep(1)
     
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
@@ -298,7 +325,7 @@ async def fetch_movies_to_cache():
     global cached_movies, last_fetch_time
     logger.info("شروع آپدیت کش فیلم‌ها...")
     try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=8)) as session:
             new_movies = []
             page = 1
             while len(new_movies) < 100 and page <= 5:
@@ -311,9 +338,10 @@ async def fetch_movies_to_cache():
                         if (m.get('title') and m.get('id') and
                             m.get('original_language') != 'hi' and
                             'IN' not in m.get('origin_country', []) and
-                            m.get('vote_average', 0) >= 6.0 and
                             m.get('poster_path')):
-                            new_movies.append({'title': m['title'], 'id': m['id']})
+                            imdb_score = await get_imdb_score(m['title'])
+                            if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                                new_movies.append({'title': m['title'], 'id': m['id']})
                     page += 1
             if new_movies:
                 cached_movies = new_movies[:100]
@@ -419,7 +447,7 @@ def format_movie_post(movie):
 """)
     
     post_sections.append(f"""
-🌟 <b>امتیاز (منبع: TMDB):</b>
+🌟 <b>امتیاز IMDB:</b>
 <b>{clean_text(movie['imdb']) or 'نامشخص'}</b>
 """)
     
@@ -586,7 +614,7 @@ async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     
     try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=8)) as session:
             tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
             async with session.get(tmdb_url) as tmdb_res:
                 tmdb_data = await tmdb_res.json()
@@ -649,7 +677,7 @@ async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 if not data.get('ok'):
                     raise Exception(f"خطا در API تلگرام: {data.get('description')}")
                 if data['result']['status'] not in ['administrator', 'creator']:
-                    raise Exception("بات ادمین کانال نیست. لطفاً بات را ادمین کنید.")
+                    raise Exception("بات ادمین کانال نیست.")
         await msg.edit_text("✅ دسترسی به کانال اوکی", reply_markup=get_tests_menu())
     except Exception as e:
         logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
@@ -667,7 +695,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with session.get(url) as response:
                 data = await response.json()
                 if not data.get('ok') or data['result']['status'] not in ['administrator', 'creator']:
-                    raise Exception("بات ادمین کانال نیست. لطفاً بات را ادمین کنید.")
+                    raise Exception("بات ادمین کانال نیست.")
         
         now = datetime.now()
         views_24h = []
@@ -734,10 +762,16 @@ async def show_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info("دکمه add_movie")
+    logger.info("دکمه add_movie زده شد")
     await query.answer()
-    await query.message.edit_text("لطفاً نام فیلم را به انگلیسی (مثل 'Dune') یا فارسی (مثل 'تل‌ماسه') وارد کنید. چند لحظه صبر کنید...")
-    return ADD_MOVIE_TITLE
+    try:
+        await query.message.reply_text("لطفاً نام فیلم را به انگلیسی (مثل 'Dune') یا فارسی (مثل 'تل‌ماسه') وارد کنید. در حال جستجو، لطفاً صبر کنید...")
+        logger.info("پیام درخواست نام فیلم ارسال شد")
+        return ADD_MOVIE_TITLE
+    except Exception as e:
+        logger.error(f"خطا در add_movie_start: {str(e)}")
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+        return ConversationHandler.END
 
 async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global bot_enabled
@@ -755,8 +789,9 @@ async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
-    logger.info(f"ورودی add_movie_title: {title}")
+    logger.info(f"ورودی add_movie_title دریافت شد: {title}")
     if not title:
+        logger.warning("نام فیلم خالی است")
         await update.message.reply_text("❌ نام فیلم نمی‌تواند خالی باشد", reply_markup=get_main_menu())
         return ConversationHandler.END
     
@@ -764,35 +799,40 @@ async def add_movie_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"تلاش برای اضافه کردن فیلم: {title}")
     
     try:
-        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=8)) as session:
             encoded_title = urllib.parse.quote(title)
             search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
             async with session.get(search_url) as response:
                 data = await response.json()
                 logger.info(f"پاسخ TMDB برای {title}: {data}")
                 if not data.get('results'):
+                    logger.warning(f"فیلم {title} در TMDB یافت نشد")
                     await msg.edit_text(f"❌ فیلم {title} یافت نشد. لطفاً نام را دقیق‌تر (انگلیسی یا فارسی) وارد کنید.", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
                 movie = data['results'][0]
                 movie_id = movie.get('id')
-                vote_average = movie.get('vote_average', 0)
                 original_language = movie.get('original_language', '')
                 origin_country = movie.get('origin_country', [])
                 
                 if original_language == 'hi' or 'IN' in origin_country:
+                    logger.warning(f"فیلم {title} هندی است")
                     await msg.edit_text(f"❌ فیلم {title} هندی است و مجاز نیست", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
-                if vote_average < 6.0:
-                    await msg.edit_text(f"❌ فیلم {title} امتیاز {vote_average:.1f} دارد (حداقل 6.0)", reply_markup=get_main_menu())
+                imdb_score = await get_imdb_score(movie.get('title', title))
+                if not imdb_score or float(imdb_score.split('/')[0]) < 6.0:
+                    logger.warning(f"فیلم {title} امتیاز IMDB معتبر ندارد یا کمتر از 6.0 است")
+                    await msg.edit_text(f"❌ فیلم {title} امتیاز IMDB معتبر ندارد یا کمتر از 6.0 است", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
                 if movie_id in [m['id'] for m in cached_movies]:
+                    logger.warning(f"فیلم {title} در لیست موجود است")
                     await msg.edit_text(f"❌ فیلم {title} در لیست موجود است", reply_markup=get_main_menu())
                     return ConversationHandler.END
                 
                 cached_movies.append({'title': movie['title'], 'id': movie_id})
+                logger.info(f"فیلم {title} به کش اضافه شد")
                 await msg.edit_text(f"✅ فیلم {title} به لیست اضافه شد", reply_markup=get_main_menu())
                 return ConversationHandler.END
     except aiohttp.ClientError as e:
