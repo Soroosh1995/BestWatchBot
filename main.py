@@ -51,66 +51,72 @@ def is_farsi(text):
     return bool(re.search(farsi_chars, text))
 
 async def get_movie_info(title):
-    """دریافت اطلاعات فیلم از TMDB و OMDB"""
+    """دریافت اطلاعات فیلم از TMDB و OMDB با فال‌بک"""
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     try:
         async with aiohttp.ClientSession() as session:
-            # TMDB برای خلاصه و تریلر
+            # TMDB برای خلاصه، تریلر، و اطلاعات اولیه
             search_url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={title}&language=fa-IR"
             async with session.get(search_url) as tmdb_response:
                 tmdb_data = await tmdb_response.json()
                 if not tmdb_data.get('results'):
                     logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
-                tmdb_plot = tmdb_data.get('results', [{}])[0].get('overview', '')
+                    tmdb_plot = ""
+                    movie_id = None
+                else:
+                    tmdb_plot = tmdb_data['results'][0].get('overview', '')
+                    movie_id = tmdb_data['results'][0].get('id')
                 
                 trailer = "N/A"
-                if tmdb_data.get('results'):
-                    movie_id = tmdb_data['results'][0].get('id')
-                    if movie_id:
-                        videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
-                        async with session.get(videos_url) as videos_response:
-                            videos_data = await videos_response.json()
-                            if videos_data.get('results'):
-                                for video in videos_data['results']:
-                                    if video['type'] == 'Trailer' and video['site'] == 'YouTube':
-                                        trailer = f"https://www.youtube.com/watch?v={video['key']}"
-                                        break
+                if movie_id:
+                    videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}"
+                    async with session.get(videos_url) as videos_response:
+                        videos_data = await videos_response.json()
+                        if videos_data.get('results'):
+                            for video in videos_data['results']:
+                                if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                    trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                    break
             
             # OMDB برای پوستر، امتیاز، و خلاصه فال‌بک
-            omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
-            async with session.get(omdb_url) as response:
-                omdb_data = await response.json()
-                
-                if omdb_data.get('Response') != 'True':
-                    logger.error(f"OMDB پاسخ معتبر نداد برای {title}: {omdb_data.get('Error')}")
-                    return None
-                
-                # انتخاب خلاصه داستان
-                plot = ""
-                if tmdb_plot and is_farsi(tmdb_plot):
-                    plot = shorten_plot(tmdb_plot)
-                    logger.info(f"خلاصه فارسی از TMDB برای {title}")
-                elif omdb_data.get('Plot') and is_farsi(omdb_data.get('Plot')):
-                    plot = shorten_plot(omdb_data.get('Plot'))
-                    logger.info(f"خلاصه فارسی از OMDB برای {title}")
-                else:
-                    plot = "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
-                    logger.info(f"فال‌بک خلاصه برای {title}")
-                
-                imdb_rating = f"{float(omdb_data.get('imdbRating', 0)):.1f}/10"
-                rt_rating = next(
-                    (r['Value'] for r in omdb_data.get('Ratings', []) 
-                    if r['Source'] == 'Rotten Tomatoes'), 'N/A')
-                
-                return {
-                    'title': omdb_data.get('Title', title),
-                    'year': omdb_data.get('Year', 'N/A'),
-                    'plot': plot,
-                    'imdb': imdb_rating,
-                    'rotten_tomatoes': rt_rating,
-                    'trailer': trailer,
-                    'poster': omdb_data.get('Poster', 'N/A')
-                }
+            omdb_data = None
+            try:
+                omdb_url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+                async with session.get(omdb_url) as response:
+                    omdb_data = await response.json()
+                    if omdb_data.get('Response') != 'True':
+                        logger.error(f"OMDB پاسخ معتبر نداد برای {title}: {omdb_data.get('Error')}")
+                        omdb_data = None
+            except Exception as e:
+                logger.error(f"خطا در درخواست OMDB برای {title}: {str(e)}")
+                omdb_data = None
+            
+            # انتخاب خلاصه داستان
+            plot = ""
+            if tmdb_plot and is_farsi(tmdb_plot):
+                plot = shorten_plot(tmdb_plot)
+                logger.info(f"خلاصه فارسی از TMDB برای {title}")
+            elif omdb_data and omdb_data.get('Plot') and is_farsi(omdb_data.get('Plot')):
+                plot = shorten_plot(omdb_data.get('Plot'))
+                logger.info(f"خلاصه فارسی از OMDB برای {title}")
+            else:
+                plot = "داستان فیلم درباره‌ی یک ماجراجویی هیجان‌انگیز است که شما را شگفت‌زده می‌کند."
+                logger.info(f"فال‌بک خلاصه برای {title}")
+            
+            # اطلاعات نهایی
+            info = {
+                'title': omdb_data.get('Title', title) if omdb_data else title,
+                'year': omdb_data.get('Year', 'N/A') if omdb_data else 'N/A',
+                'plot': plot,
+                'imdb': omdb_data.get('imdbRating', 'N/A') + '/10' if omdb_data and omdb_data.get('imdbRating') else 'N/A',
+                'rotten_tomatoes': next(
+                    (r['Value'] for r in omdb_data.get('Ratings', []) if omdb_data and r['Source'] == 'Rotten Tomatoes'),
+                    'N/A'
+                ),
+                'trailer': trailer,
+                'poster': omdb_data.get('Poster', 'N/A') if omdb_data else 'N/A'
+            }
+            return info
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات فیلم {title}: {str(e)}")
         return None
@@ -301,10 +307,14 @@ async def test_apis(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tmdb_status = "✅ TMDB اوکی" if tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
                 
                 # OMDB
-                omdb_url = f"http://www.omdbapi.com/?t=Inception&apikey={OMDB_API_KEY}"
-                async with session.get(omdb_url) as omdb_res:
-                    omdb_data = await omdb_res.json()
-                    omdb_status = "✅ OMDB اوکی" if omdb_data.get('Response') == 'True' else f"❌ OMDB خطا: {omdb_data.get('Error')}"
+                omdb_status = "❌ OMDB غیرفعال یا خطا"
+                try:
+                    omdb_url = f"http://www.omdbapi.com/?t=Inception&apikey={OMDB_API_KEY}"
+                    async with session.get(omdb_url) as omdb_res:
+                        omdb_data = await omdb_res.json()
+                        omdb_status = "✅ OMDB اوکی" if omdb_data.get('Response') == 'True' else f"❌ OMDB خطا: {omdb_data.get('Error')}"
+                except Exception as e:
+                    omdb_status = f"❌ OMDB خطا: {str(e)}"
                 
                 await msg.edit_text(f"{tmdb_status}\n{omdb_status}")
         except Exception as e:
@@ -393,7 +403,7 @@ async def run_bot():
     job_queue = app.job_queue
     if job_queue:
         logger.info("JobQueue فعال شد")
-        job_queue.run_repeating(auto_post, interval=600, first=10)
+        job_queue.run_repeating(auto_post, interval=3600, first=10)  # هر ساعت
     else:
         logger.error("JobQueue فعال نشد")
         await app.bot.send_message(ADMIN_ID, "❌ خطا: JobQueue فعال نشد")
