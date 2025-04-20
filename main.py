@@ -18,7 +18,7 @@ import aiohttp.client_exceptions
 import re
 import certifi
 
-# --- تنظیمات اولیه ---
+# تنظیمات اولیه
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -48,14 +48,14 @@ async def init_openai_client():
     global client
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- وضعیت دسترسی APIها ---
+# وضعیت دسترسی APIها
 api_availability = {
     'gemini': True,
     'groq': True,
     'openai': True
 }
 
-# --- کش و متغیرهای سراسری ---
+# کش و متغیرهای سراسری
 cached_movies = []
 posted_movies = []
 last_fetch_time = datetime.now() - timedelta(days=1)
@@ -65,7 +65,7 @@ bot_enabled = True
 CACHE_FILE = "movie_cache.json"
 POSTED_MOVIES_FILE = "posted_movies.json"
 
-# --- دیکشنری ترجمه ژانرها ---
+# دیکشنری ترجمه ژانرها
 GENRE_TRANSLATIONS = {
     'Action': 'اکشن',
     'Adventure': 'ماجراجویی',
@@ -88,7 +88,7 @@ GENRE_TRANSLATIONS = {
     'Unknown': 'سایر'
 }
 
-# --- فال‌بک‌های گسترده‌تر ---
+# فال‌بک‌های گسترده‌تر
 FALLBACK_PLOTS = {
     'اکشن': [
         "جهانی پر از خطر و تعقیب و گریز، جایی که قهرمانی شجاع با دشمنانی قدرتمند روبرو می‌شود. نبردهای نفس‌گیر و تصمیم‌های دشوار او را به سوی هدفی بزرگ هدایت می‌کنند. آیا او می‌تواند در برابر همه موانع پیروز شود؟",
@@ -165,17 +165,17 @@ FALLBACK_COMMENTS = {
     ]
 }
 
-# --- شمارشگر خطاهای API ---
+# شمارشگر خطاهای API
 api_errors = {
     'tmdb': 0,
     'omdb': 0
 }
 
-# --- توابع کمکی ---
+# توابع کمکی
 def clean_text(text):
     if not text or text == 'N/A':
         return None
-    return text[:500]  # افزایش حداکثر طول متن
+    return text[:500]
 
 def shorten_plot(text, max_sentences=3):
     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -183,11 +183,10 @@ def shorten_plot(text, max_sentences=3):
     return result if result else ''
 
 def clean_text_for_validation(text):
-    """تمیز کردن متن برای اعتبارسنجی: حذف فاصله‌های اضافی و کاراکترهای غیرضروری"""
     if not text:
         return ""
-    text = re.sub(r'\s+', ' ', text)  # جایگزینی فاصله‌های اضافی با یک فاصله
-    text = re.sub(r'[\n\t]', ' ', text)  # حذف خط جدید و تب
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'[\n\t]', ' ', text)
     text = text.strip()
     return text
 
@@ -202,7 +201,6 @@ def is_valid_plot(text):
     return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
 
 def is_valid_comment(text):
-    """چک کردن معتبر بودن تحلیل: حداقل 50 کلمه و فارسی بودن"""
     if not text:
         return False
     text = clean_text_for_validation(text)
@@ -306,7 +304,6 @@ async def get_imdb_score_tmdb(title, genres=None):
     movie = data['results'][0]
     imdb_score = movie.get('vote_average', 0)
     
-    # چک کردن ژانر انیمیشن
     is_animation = False
     if genres:
         is_animation = 'انیمیشن' in genres
@@ -334,7 +331,6 @@ async def get_imdb_score_omdb(title, genres=None):
         return None
     imdb_score = data.get('imdbRating', '0')
     
-    # چک کردن ژانر انیمیشن
     is_animation = False
     if genres:
         is_animation = 'انیمیشن' in genres
@@ -357,7 +353,7 @@ async def check_poster(url):
                 if response.status != 200:
                     return False
                 content_length = response.headers.get('Content-Length')
-                if content_length and int(content_length) > 5 * 1024 * 1024:  # 5MB
+                if content_length and int(content_length) > 5 * 1024 * 1024:
                     logger.warning(f"پوستر {url} بیش از حد بزرگ است")
                     return False
                 return True
@@ -431,7 +427,6 @@ async def get_movie_info(title):
         details_data = await make_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
         
-        # فیلتر مستند
         if 'مستند' in genres:
             logger.warning(f"فیلم {tmdb_title} مستند است، رد شد")
             return None
@@ -439,7 +434,7 @@ async def get_movie_info(title):
         search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
         tmdb_data_fa = await make_api_request(search_url_fa)
         tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
-        logger.info(f"خلاصه داستان TMDB برای {tmdb_title}: {tmdb_plot[:100]}...")  # لاگ برای دیباگ
+        logger.info(f"خلاصه داستان TMDB برای {tmdb_title}: {tmdb_plot[:100]}...")
         if not tmdb_plot or not is_farsi(tmdb_plot):
             logger.warning(f"خلاصه داستان TMDB نامعتبر یا غیرفارسی برای {tmdb_title}: {tmdb_plot}")
         tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
@@ -472,12 +467,11 @@ async def get_movie_info(title):
                 'genres': genres[:3]
             }
     
-    # اگه TMDB داده برگردانده اما فیلم رد شده، مستقیم None برگردون
     if tmdb_data_en and tmdb_data_en.get('results'):
         logger.info(f"فیلم {title} توسط TMDB رد شد، بررسی OMDb انجام نمی‌شود")
         return None
     
-    # 2. OMDb (فقط اگه TMDB کاملاً در دسترس نباشد)
+    # 2. OMDb
     logger.info(f"تلاش با OMDb برای {title}")
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
     omdb_data = await make_api_request(omdb_url)
@@ -485,7 +479,6 @@ async def get_movie_info(title):
         genres = omdb_data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
         
-        # فیلتر مستند
         if 'مستند' in genres:
             logger.warning(f"فیلم {omdb_data.get('Title')} مستند است، رد شد")
             return None
@@ -493,7 +486,7 @@ async def get_movie_info(title):
         imdb_score = await get_imdb_score_omdb(omdb_data.get('Title', title), genres)
         if imdb_score:
             plot = omdb_data.get('Plot', '')
-            logger.info(f"خلاصه داستان OMDb برای {omdb_data.get('Title', title)}: {plot[:100]}...")  # لاگ برای دیباگ
+            logger.info(f"خلاصه داستان OMDb برای {omdb_data.get('Title', title)}: {plot[:100]}...")
             if not plot or not is_farsi(plot):
                 logger.warning(f"خلاصه داستان OMDb نامعتبر یا غیرفارسی برای {omdb_data.get('Title', title)}: {plot}")
                 plot = ''
@@ -577,7 +570,7 @@ async def generate_comment(genres):
                         return result if result else ''
                     logger.warning(f"تحلیل Groq نامعتبر: {text}")
                 else:
-                    logger.warning(f"پاسخ Groq خالی یا نام چندگانه: {response}")
+                    logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
         except aiohttp.client_exceptions.ClientConnectorError as e:
             logger.error(f"خطای اتصال Groq: {str(e)}")
             api_availability['groq'] = False
@@ -645,7 +638,6 @@ async def fetch_movies_to_cache():
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
                 page = 1
                 while len(new_movies) < 100 and page <= 20:
-                    # 1. TMDB
                     logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
                     tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
                     tmdb_data = await make_api_request(tmdb_url)
@@ -665,7 +657,6 @@ async def fetch_movies_to_cache():
                                     new_movies.append({'title': m['title'], 'id': str(m['id'])})
                         page += 1
 
-                    # 2. OMDb
                     logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
                     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&s=movie&type=movie&page={page}"
                     omdb_data = await make_api_request(omdb_url)
@@ -673,7 +664,7 @@ async def fetch_movies_to_cache():
                         for m in omdb_data['Search']:
                             genres = m.get('Genre', '').split(', ')
                             genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-                            if 'مستند' in genres:
+                            if 'مستند' در genres:
                                 continue
                             imdb_score = await get_imdb_score_omdb(m['Title'])
                             if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
@@ -734,7 +725,6 @@ async def get_random_movie(max_retries=5):
                 logger.warning(f"اطلاعات فیلم {movie['title']} نامعتبر، تلاش مجدد...")
                 continue
             
-            # چک اضافی برای انیمیشن
             if 'انیمیشن' in movie_info['genres'] and float(movie_info['imdb'].split('/')[0]) < 8.0:
                 logger.warning(f"فیلم {movie['title']} انیمیشن است اما امتیاز {movie_info['imdb']} دارد، رد شد")
                 continue
@@ -923,7 +913,7 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ ارسال پست کنسل شد: ربات غیرفعال است", reply_markup=get_main_menu())
             return
         
-        async with asyncio.timeout(120):  # تایم‌اوت 2 دقیقه
+        async with asyncio.timeout(120):
             movie = await get_random_movie()
             if not movie:
                 logger.error("هیچ فیلمی انتخاب نشد")
@@ -1025,7 +1015,11 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         text = response.choices[0].message.content.strip()
         openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-        results ​​یields.append(results)
+        results.append(openai_status)
+    except Exception as e:
+        logger.error(f"خطا در تست Open AI: {str(e)}")
+        api_availability['openai'] = False
+        results.append(f"❌ Open AI خطا: {str(e)}")
 
     return "\n".join(results)
 
@@ -1204,7 +1198,7 @@ async def run_bot():
 
 async def main():
     logger.info("شروع برنامه...")
-    await init_openai_client()  # مقداردهی Open AI client
+    await init_openai_client()
     await load_cache_from_file()
     await load_posted_movies_from_file()
     if not await fetch_movies_to_cache():
