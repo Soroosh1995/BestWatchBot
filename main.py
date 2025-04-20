@@ -113,6 +113,24 @@ def clean_text_for_validation(text):
     text = text.strip()
     return text
 
+def shorten_comment(text):
+    """کوتاه کردن تحلیل به 60-90 کلمه با حفظ جملات کامل"""
+    text = clean_text_for_validation(text)
+    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+    result = []
+    word_count = 0
+    for sentence in sentences:
+        sentence_words = sentence.split()
+        if word_count + len(sentence_words) <= 90:
+            result.append(sentence)
+            word_count += len(sentence_words)
+        else:
+            break
+    shortened_text = '. '.join(result).rstrip('.')
+    if 60 <= len(shortened_text.split()) <= 90 and is_valid_comment(shortened_text):
+        return shortened_text
+    return None
+
 def is_farsi(text):
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
@@ -529,7 +547,14 @@ async def generate_comment(genres):
         try:
             async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."
+                prompt = """
+یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 7 تا 10 جمله کوتاه و کامل (هر جمله با نقطه پایان یابد). 
+لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. 
+درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. 
+فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. 
+متن باید دقیقاً بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد. 
+اگر تعداد کلمات خارج از این محدوده شد، جملات را کوتاه‌تر کن تا در محدوده بماند.
+"""
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -537,9 +562,16 @@ async def generate_comment(genres):
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Gemini با موفقیت دریافت شد")
-                    result = text.rstrip('.')
-                    return result if result else ''
+                    return text.rstrip('.')
                 logger.warning(f"تحلیل Gemini نامعتبر: {text}")
+                # تلاش برای کوتاه کردن
+                shortened_text = shorten_comment(text)
+                if shortened_text:
+                    previous_comments.append(shortened_text)
+                    if len(previous_comments) > 10:
+                        previous_comments.pop(0)
+                    logger.info("تحلیل Gemini کوتاه‌شده با موفقیت دریافت شد")
+                    return shortened_text.rstrip('.')
         except google_exceptions.ResourceExhausted:
             logger.error("خطا: توکن Gemini تمام شده است")
             api_availability['gemini'] = False
@@ -563,9 +595,16 @@ async def generate_comment(genres):
                     "model": "mistral-saba-24b",
                     "messages": [
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."}
+                        {"role": "user", "content": """
+یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 7 تا 10 جمله کوتاه و کامل (هر جمله با نقطه پایان یابد). 
+لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. 
+درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. 
+فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. 
+متن باید دقیقاً بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد. 
+اگر تعداد کلمات خارج از این محدوده شد، جملات را کوتاه‌تر کن تا در محدوده بماند.
+"""}
                     ],
-                    "max_tokens": 800,
+                    "max_tokens": 150,
                     "temperature": 0.7
                 }
                 response = await post_api_request(url, data, headers, retries=3)
@@ -576,9 +615,16 @@ async def generate_comment(genres):
                         if len(previous_comments) > 10:
                             previous_comments.pop(0)
                         logger.info("تحلیل Groq با موفقیت دریافت شد")
-                        result = text.rstrip('.')
-                        return result if result else ''
+                        return text.rstrip('.')
                     logger.warning(f"تحلیل Groq نامعتبر: {text}")
+                    # تلاش برای کوتاه کردن
+                    shortened_text = shorten_comment(text)
+                    if shortened_text:
+                        previous_comments.append(shortened_text)
+                        if len(previous_comments) > 10:
+                            previous_comments.pop(0)
+                        logger.info("تحلیل Groq کوتاه‌شده با موفقیت دریافت شد")
+                        return shortened_text.rstrip('.')
                 else:
                     logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
         except aiohttp.client_exceptions.ClientConnectorError as e:
@@ -599,9 +645,16 @@ async def generate_comment(genres):
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."}
+                        {"role": "user", "content": """
+یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 7 تا 10 جمله کوتاه و کامل (هر جمله با نقطه پایان یابد). 
+لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. 
+درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. 
+فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. 
+متن باید دقیقاً بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد. 
+اگر تعداد کلمات خارج از این محدوده شد، جملات را کوتاه‌تر کن تا در محدوده بماند.
+"""}
                     ],
-                    max_tokens=800,
+                    max_tokens=150,
                     temperature=0.7
                 )
                 text = clean_text_for_validation(response.choices[0].message.content.strip())
@@ -610,15 +663,35 @@ async def generate_comment(genres):
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Open AI با موفقیت دریافت شد")
-                    result = text.rstrip('.')
-                    return result if result else ''
+                    return text.rstrip('.')
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
+                # تلاش برای کوتاه کردن
+                shortened_text = shorten_comment(text)
+                if shortened_text:
+                    previous_comments.append(shortened_text)
+                    if len(previous_comments) > 10:
+                        previous_comments.pop(0)
+                    logger.info("تحلیل Open AI کوتاه‌شده با موفقیت دریافت شد")
+                    return shortened_text.rstrip('.')
         except Exception as e:
             logger.error(f"خطا در Open AI API: {str(e)}")
             api_availability['openai'] = False
+            await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}.")
 
-    # 4. فال‌بک
-    logger.warning("هیچ تحلیلگری در دسترس نیست، تولید تحلیل ناموفق")
+    # 4. فال‌بک موقت
+    logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک موقت")
+    fallback_comment = """
+کارگردانی فیلم با استفاده از نورپردازی دقیق، فضایی گیرا خلق می‌کند. بازیگران با اجرای قوی، احساسات شخصیت‌ها را منتقل می‌کنند. موسیقی متن به خوبی لحظات دراماتیک را تقویت می‌کند. طراحی صحنه‌ها با جزئیات، داستان را غنی‌تر می‌کند. با این حال، ریتم فیلم گاهی کند می‌شود. نقطه قوت فیلم در روایت عمیق آن است. این اثر تجربه‌ای جذاب برای مخاطب است.
+"""
+    if is_valid_comment(fallback_comment):
+        previous_comments.append(fallback_comment)
+        if len(previous_comments) > 10:
+            previous_comments.pop(0)
+        logger.info("تحلیل فال‌بک با موفقیت استفاده شد")
+        return fallback_comment.rstrip('.')
+    
+    logger.error("حتی فال‌بک هم ناموفق بود")
+    await send_admin_alert(None, "❌ خطا: هیچ تحلیلی تولید نشد، لطفاً پرامپت‌ها و APIها را بررسی کنید.")
     return None
 
 async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str, reply_markup=None):
