@@ -204,19 +204,42 @@ def clean_text(text):
     return text[:300]
 
 def shorten_plot(text, max_sentences=3):
-    sentences = [s.strip() for s in re.split(r'[.!؟]+', text) if s.strip()]
+    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
     return '. '.join(sentences[:max_sentences]) + ('.' if sentences else '')
+
+def clean_text_for_validation(text):
+    """تمیز کردن متن برای اعتبارسنجی: حذف فاصله‌های اضافی و کاراکترهای غیرضروری"""
+    if not text:
+        return ""
+    text = re.sub(r'\s+', ' ', text)  # جایگزینی فاصله‌های اضافی با یک فاصله
+    text = re.sub(r'[\n\t]', ' ', text)  # حذف خط جدید و تب
+    text = text.strip()
+    return text
 
 def is_farsi(text):
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
 
-def is_valid_comment(text):
-    if not text or len(text) < 300 or len(text) > 500:
+def is_valid_plot(text):
+    if not text or len(text.split()) < 5:
         return False
+    sentences = text.split('. ')
+    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
+
+def is_valid_comment(text):
+    """چک کردن معتبر بودن تحلیل: حداقل 3 جمله و فارسی بودن"""
+    if not text:
+        return False
+    text = clean_text_for_validation(text)
     if not is_farsi(text):
+        logger.warning(f"تحلیل رد شد: متن غیرفارسی - {text}")
+        return False
+    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+    if len(sentences) < 3:
+        logger.warning(f"تحلیل رد شد: کمتر از 3 جمله - {text}")
         return False
     if text in previous_comments:
+        logger.warning(f"تحلیل رد شد: متن تکراری - {text}")
         return False
     return True
 
@@ -263,7 +286,7 @@ async def make_api_request(url, retries=5, timeout=15, headers=None):
             await asyncio.sleep(2 ** attempt)
     return None
 
-async def post_api_request(url, data, headers, retries=3, timeout=10):
+async def post_api_request(url, data, headers, retries=3, timeout=15):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
@@ -501,17 +524,17 @@ async def generate_comment(genres):
     if api_availability['gemini']:
         logger.info("تلاش با Gemini")
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 300 تا 500 کاراکتر. لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
+                prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
                 response = await model.generate_content_async(prompt)
-                text = response.text.strip()
+                text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
                     previous_comments.append(text)
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Gemini با موفقیت دریافت شد")
-                    return text
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                 logger.warning(f"تحلیل Gemini نامعتبر: {text}")
         except google_exceptions.ResourceExhausted:
             logger.error("خطا: توکن Gemini تمام شده است")
@@ -526,7 +549,7 @@ async def generate_comment(genres):
     if api_availability['groq']:
         logger.info("تلاش با Groq")
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(15):
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {
                     "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -536,20 +559,20 @@ async def generate_comment(genres):
                     "model": "mistral-saba-24b",
                     "messages": [
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 300 تا 500 کاراکتر. لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                     ],
-                    "max_tokens": 250,
-                    "temperature": 0.9
+                    "max_tokens": 150,
+                    "temperature": 0.7
                 }
                 response = await post_api_request(url, data, headers, retries=3)
                 if response and response.get('choices'):
-                    text = response['choices'][0]['message']['content'].strip()
+                    text = clean_text_for_validation(response['choices'][0]['message']['content'].strip())
                     if is_valid_comment(text):
                         previous_comments.append(text)
                         if len(previous_comments) > 10:
                             previous_comments.pop(0)
                         logger.info("تحلیل Groq با موفقیت دریافت شد")
-                        return text
+                        return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                     logger.warning(f"تحلیل Groq نامعتبر: {text}")
                 else:
                     logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
@@ -566,23 +589,23 @@ async def generate_comment(genres):
     if api_availability['openai']:
         logger.info("تلاش با Open AI")
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(15):
                 response = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 300 تا 500 کاراکتر. لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                     ],
-                    max_tokens=250,
-                    temperature=0.9
+                    max_tokens=150,
+                    temperature=0.7
                 )
-                text = response.choices[0].message.content.strip()
+                text = clean_text_for_validation(response.choices[0].message.content.strip())
                 if is_valid_comment(text):
                     previous_comments.append(text)
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Open AI با موفقیت دریافت شد")
-                    return text
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
         except aiohttp.client_exceptions.ClientConnectorError as e:
             logger.error(f"خطای اتصال Open AI: {str(e)}")
@@ -981,7 +1004,7 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
                 ],
                 "max_tokens": 50,
-                "temperature": 0.9
+                "temperature": 0.7
             }
             response = await post_api_request(url, data, headers, retries=3)
             text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
@@ -1002,7 +1025,7 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
                 ],
                 max_tokens=50,
-                temperature=0.9
+                temperature=0.7
             )
             text = response.choices[0].message.content.strip()
             openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
