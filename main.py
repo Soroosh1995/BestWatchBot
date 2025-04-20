@@ -664,7 +664,7 @@ async def fetch_movies_to_cache():
                         for m in omdb_data['Search']:
                             genres = m.get('Genre', '').split(', ')
                             genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-                            if 'مستند' در genres:
+                            if 'مستند' in genres:
                                 continue
                             imdb_score = await get_imdb_score_omdb(m['Title'])
                             if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
