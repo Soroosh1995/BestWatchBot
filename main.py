@@ -955,7 +955,11 @@ def format_movie_post(movie):
 🎬 <b>عنوان فیلم:</b>
 <b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
 
-📝 <b>خلاصه داستان:</b>
+📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
+"""
+    ]
+
+    📝 <b>خلاصه داستان:</b>
 {rlm}{clean_text(movie['plot'])}
 """)
     else:
@@ -965,10 +969,6 @@ def format_movie_post(movie):
         post_sections.append(f"""
         
 {genres}
-📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
-"""
-    ]
-    
     if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
         post_sections.append(f"""
 
