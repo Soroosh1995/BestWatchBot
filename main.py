@@ -342,7 +342,7 @@ async def get_imdb_score_omdb(title, genres=None):
     else:
         genres = data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-        is_animation = 'انیمیشن' در genres
+        is_animation = 'انیمیشن' in genres
     
     min_score = 8.0 if is_animation else 6.0
     if float(imdb_score) < min_score:
