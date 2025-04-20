@@ -31,8 +31,9 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 POST_INTERVAL = int(os.getenv('POST_INTERVAL', 600))
@@ -48,15 +49,20 @@ async def init_openai_client():
     global client
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
+# --- وضعیت دسترسی APIها ---
+api_availability = {
+    'gemini': True,
+    'groq': True,
+    'deepseek': True,
+    'openai': True
+}
+
 # --- کش و متغیرهای سراسری ---
 cached_movies = []
 posted_movies = []
 last_fetch_time = datetime.now() - timedelta(days=1)
 previous_plots = []
 previous_comments = []
-gemini_available = True
-deepseek_available = True
-openai_available = True
 bot_enabled = True
 CACHE_FILE = "movie_cache.json"
 POSTED_MOVIES_FILE = "posted_movies.json"
@@ -190,8 +196,7 @@ FALLBACK_COMMENTS = {
 # --- شمارشگر خطاهای API ---
 api_errors = {
     'tmdb': 0,
-    'omdb': 0,
-    'deepseek': 0
+    'omdb': 0
 }
 
 # --- توابع کمکی ---
@@ -337,7 +342,7 @@ async def get_imdb_score_omdb(title, genres=None):
     else:
         genres = data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-        is_animation = 'انیمیشن' in genres
+        is_animation = 'انیمیشن' در genres
     
     min_score = 8.0 if is_animation else 6.0
     if float(imdb_score) < min_score:
@@ -489,15 +494,13 @@ async def get_movie_info(title):
     return random.choice(FALLBACK_MOVIES)
 
 async def generate_comment(genres):
-    global gemini_available, deepseek_available, openai_available
     logger.info("تولید تحلیل...")
 
     # 1. Gemini
-    if gemini_available:
+    if api_availability['gemini']:
         logger.info("تلاش با Gemini")
-        max_attempts = 2
-        for attempt in range(max_attempts):
-            try:
+        try:
+            async with asyncio.timeout(10):
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
                 response = await model.generate_content_async(prompt)
@@ -509,23 +512,62 @@ async def generate_comment(genres):
                         previous_comments.pop(0)
                     logger.info("تحلیل Gemini با موفقیت دریافت شد")
                     return '. '.join(sentences[:3]) + '.'
-                logger.warning(f"تحلیل Gemini نامعتبر (تلاش {attempt + 1}): {text}")
-            except google_exceptions.ResourceExhausted as e:
-                logger.error(f"خطا: توکن Gemini تمام شده است: {str(e)}")
-                gemini_available = False
-                await send_admin_alert(None, "❌ توکن Gemini تمام شده است.")
-            except google_exceptions.ClientError as e:
-                logger.error(f"خطای کلاینت Gemini (تلاش {attempt + 1}): {str(e)}")
-            except Exception as e:
-                logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
-        logger.info("Gemini ناموفق بود، تلاش با DeepSeek...")
+                logger.warning(f"تحلیل Gemini نامعتبر: {text}")
+        except google_exceptions.ResourceExhausted:
+            logger.error("خطا: توکن Gemini تمام شده است")
+            api_availability['gemini'] = False
+            await send_admin_alert(None, "❌ توکن Gemini تمام شده است.")
+        except Exception as e:
+            logger.error(f"خطا در Gemini API: {str(e)}")
+            api_availability['gemini'] = False
+            await send_admin_alert(None, f"❌ خطا در Gemini: {str(e)}.")
 
-    # 2. DeepSeek
-    if deepseek_available:
+    # 2. Groq
+    if api_availability['groq']:
+        logger.info("تلاش با Groq")
+        try:
+            async with asyncio.timeout(10):
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": "mixtral-8x7b-32768",
+                    "messages": [
+                        {"role": "system", "content": "You are a professional film critic writing in Persian."},
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.7
+                }
+                response = await post_api_request(url, data, headers, retries=3)
+                if response and response.get('choices'):
+                    text = response['choices'][0]['message']['content'].strip()
+                    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
+                    if len(sentences) >= 3 and is_farsi(text) and len(text.split()) > 15:
+                        previous_comments.append(text)
+                        if len(previous_comments) > 10:
+                            previous_comments.pop(0)
+                        logger.info("تحلیل Groq با موفقیت دریافت شد")
+                        return '. '.join(sentences[:3]) + '.'
+                    logger.warning(f"تحلیل Groq نامعتبر: {text}")
+                else:
+                    logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال Groq: {str(e)}")
+            api_availability['groq'] = False
+            await send_admin_alert(None, f"❌ مشکل اتصال به Groq: {str(e)}.")
+        except Exception as e:
+            logger.error(f"خطا در Groq API: {str(e)}")
+            api_availability['groq'] = False
+            await send_admin_alert(None, f"❌ خطا در Groq: {str(e)}.")
+
+    # 3. DeepSeek
+    if api_availability['deepseek']:
         logger.info("تلاش با DeepSeek")
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
+        try:
+            async with asyncio.timeout(10):
                 url = "https://api.deepseek.com/v1/chat/completions"
                 headers = {
                     "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -540,7 +582,7 @@ async def generate_comment(genres):
                     "max_tokens": 150,
                     "temperature": 0.7
                 }
-                response = await post_api_request(url, data, headers, retries=3, timeout=10)
+                response = await post_api_request(url, data, headers, retries=3)
                 if response and response.get('choices'):
                     text = response['choices'][0]['message']['content'].strip()
                     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -550,30 +592,23 @@ async def generate_comment(genres):
                             previous_comments.pop(0)
                         logger.info("تحلیل DeepSeek با موفقیت دریافت شد")
                         return '. '.join(sentences[:3]) + '.'
-                    logger.warning(f"تحلیل DeepSeek نامعتبر (تلاش {attempt + 1}): {text}")
+                    logger.warning(f"تحلیل DeepSeek نامعتبر: {text}")
                 else:
-                    logger.warning(f"پاسخ DeepSeek خالی یا نامعتبر (تلاش {attempt + 1}): {response}")
-            except aiohttp.client_exceptions.ClientConnectorError as e:
-                logger.error(f"خطای اتصال DeepSeek (تلاش {attempt + 1}): {str(e)}")
-                api_errors['deepseek'] += 1
-                if attempt == max_attempts - 1:
-                    deepseek_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به DeepSeek: {str(e)}.")
-            except Exception as e:
-                logger.error(f"خطا در DeepSeek API (تلاش {attempt + 1}): {str(e)}")
-                api_errors['deepseek'] += 1
-                if attempt == max_attempts - 1:
-                    deepseek_available = False
-                    await send_admin_alert(None, f"❌ خطا در DeepSeek: {str(e)}.")
-            await asyncio.sleep(2 ** attempt)
-        logger.info("DeepSeek ناموفق بود، تلاش با Open AI...")
+                    logger.warning(f"پاسخ DeepSeek خالی یا نامعتبر: {response}")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال DeepSeek: {str(e)}")
+            api_availability['deepseek'] = False
+            await send_admin_alert(None, f"❌ مشکل اتصال به DeepSeek: {str(e)}.")
+        except Exception as e:
+            logger.error(f"خطا در DeepSeek API: {str(e)}")
+            api_availability['deepseek'] = False
+            await send_admin_alert(None, f"❌ خطا در DeepSeek: {str(e)}.")
 
-    # 3. Open AI
-    if openai_available:
+    # 4. Open AI
+    if api_availability['openai']:
         logger.info("تلاش با Open AI")
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
+        try:
+            async with asyncio.timeout(10):
                 response = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
@@ -581,8 +616,7 @@ async def generate_comment(genres):
                         {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                     ],
                     max_tokens=150,
-                    temperature=0.7,
-                    timeout=10
+                    temperature=0.7
                 )
                 text = response.choices[0].message.content.strip()
                 sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -593,21 +627,16 @@ async def generate_comment(genres):
                     logger.info("تحلیل Open AI با موفقیت دریافت شد")
                     return '. '.join(sentences[:3]) + '.'
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
-            except aiohttp.client_exceptions.ClientConnectorError as e:
-                logger.error(f"خطای اتصال Open AI (تلاش {attempt + 1}): {str(e)}")
-                if attempt == max_attempts - 1:
-                    openai_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد.")
-                await asyncio.sleep(2 ** attempt)
-            except Exception as e:
-                logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
-                if attempt == max_attempts - 1:
-                    openai_available = False
-                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید.")
-                await asyncio.sleep(2 ** attempt)
-        logger.info("Open AI ناموفق بود، استفاده از فال‌بک...")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال Open AI: {str(e)}")
+            api_availability['openai'] = False
+            await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}.")
+        except Exception as e:
+            logger.error(f"خطا در Open AI API: {str(e)}")
+            api_availability['openai'] = False
+            await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}.")
 
-    # 4. فال‌بک
+    # 5. فال‌بک
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
     comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
     previous_comments.append(comment)
@@ -820,11 +849,10 @@ def get_main_menu():
         ],
         [
             InlineKeyboardButton("تست‌ها", callback_data='tests_menu'),
-            InlineKeyboardButton("آمار بازدید", callback_data='stats')
+            InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')
         ],
         [
-            InlineKeyboardButton(toggle_text, callback_data='toggle_bot'),
-            InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')
+            InlineKeyboardButton(toggle_text, callback_data='toggle_bot')
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -915,37 +943,42 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error("ارسال پست کنسل شد: ربات غیرفعال است")
             await msg.edit_text("❌ ارسال پست کنسل شد: ربات غیرفعال است", reply_markup=get_main_menu())
             return
-        movie = await get_random_movie()
-        if not movie:
-            logger.error("هیچ فیلمی انتخاب نشد")
-            await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
-            return
         
-        await msg.edit_text(f"در حال آماده‌سازی پست برای {movie['title']} (تولید تحلیل)...")
-        logger.info(f"ارسال پست برای: {movie['title']}")
-        if movie['poster']:
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=movie['poster'],
-                caption=format_movie_post(movie),
-                parse_mode='HTML',
-                disable_notification=True
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=format_movie_post(movie),
-                parse_mode='HTML',
-                disable_notification=True
-            )
-        await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
+        async with asyncio.timeout(120):  # تایم‌اوت 2 دقیقه
+            movie = await get_random_movie()
+            if not movie:
+                logger.error("هیچ فیلمی انتخاب نشد")
+                await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
+                return
+            
+            await msg.edit_text(f"در حال آماده‌سازی پست برای {movie['title']} (تولید تحلیل)...")
+            logger.info(f"ارسال پست برای: {movie['title']}")
+            if movie['poster']:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=movie['poster'],
+                    caption=format_movie_post(movie),
+                    parse_mode='HTML',
+                    disable_notification=True
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=format_movie_post(movie),
+                    parse_mode='HTML',
+                    disable_notification=True
+                )
+            await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
+    except asyncio.TimeoutError:
+        logger.error("ارسال پست فوری به دلیل تایم‌اوت کنسل شد")
+        await msg.edit_text("❌ ارسال پست به دلیل طولانی شدن (بیش از 2 دقیقه) کنسل شد", reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"خطا در post_now: {e}")
         await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
 
-async def run_tests(context: ContextTypes.DEFAULT_TYPE):
+async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
-    
+
     # تست TMDB
     tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
     tmdb_data = await make_api_request(tmdb_url)
@@ -963,77 +996,104 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
     results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
 
     # تست Gemini
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = "تست: یک جمله به فارسی بنویس."
-        response = await model.generate_content_async(prompt)
-        text = response.text.strip()
-        gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
-        results.append(gemini_status)
-    except Exception as e:
-        logger.error(f"خطا در تست Gemini: {str(e)}")
-        results.append(f"❌ Gemini خطا: {str(e)}")
+    if api_availability['gemini']:
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = "تست: یک جمله به فارسی بنویس."
+            response = await model.generate_content_async(prompt)
+            text = response.text.strip()
+            gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
+            results.append(gemini_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Gemini: {str(e)}")
+            api_availability['gemini'] = False
+            results.append(f"❌ Gemini خطا: {str(e)}")
+
+    # تست Groq
+    if api_availability['groq']:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "mixtral-8x7b-32768",
+                "messages": [
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                "max_tokens": 50,
+                "temperature": 0.7
+            }
+            response = await post_api_request(url, data, headers, retries=3)
+            text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
+            groq_status = "✅ Groq اوکی" if text and is_farsi(text) else f"❌ Groq خطا: پاسخ نامعتبر - متن دریافتی: {text}"
+            results.append(groq_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Groq: {str(e)}")
+            api_availability['groq'] = False
+            results.append(f"❌ Groq خطا: {str(e)}")
 
     # تست DeepSeek
-    try:
-        url = "https://api.deepseek.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": "Write in Persian."},
-                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-            ],
-            "max_tokens": 50,
-            "temperature": 0.7
-        }
-        response = await post_api_request(url, data, headers, retries=3, timeout=10)
-        text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
-        if text and is_farsi(text):
-            deepseek_status = "✅ DeepSeek اوکی"
-        else:
-            deepseek_status = f"❌ DeepSeek خطا: پاسخ نامعتبر - متن دریافتی: {text}"
-        results.append(deepseek_status)
-    except Exception as e:
-        logger.error(f"خطا در تست DeepSeek: {str(e)}")
-        results.append(f"❌ DeepSeek خطا: {str(e)}")
+    if api_availability['deepseek']:
+        try:
+            url = "https://api.deepseek.com/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                "max_tokens": 50,
+                "temperature": 0.7
+            }
+            response = await post_api_request(url, data, headers, retries=3)
+            text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
+            deepseek_status = "✅ DeepSeek اوکی" if text and is_farsi(text) else f"❌ DeepSeek خطا: پاسخ نامعتبر - متن دریافتی: {text}"
+            results.append(deepseek_status)
+        except Exception as e:
+            logger.error(f"خطا در تست DeepSeek: {str(e)}")
+            api_availability['deepseek'] = False
+            results.append(f"❌ DeepSeek خطا: {str(e)}")
 
     # تست Open AI
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Write in Persian."},
-                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-            ],
-            max_tokens=50,
-            temperature=0.7,
-            timeout=10
-        )
-        text = response.choices[0].message.content.strip()
-        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-        results.append(openai_status)
-    except aiohttp.client_exceptions.ClientConnectorError as e:
-        logger.error(f"خطا در تست Open AI: {str(e)}")
-        results.append(f"❌ Open AI خطا: مشکل اتصال - {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد.")
-    except Exception as e:
-        logger.error(f"خطا در تست Open AI: {str(e)}")
-        results.append(f"❌ Open AI خطا: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید.")
+    if api_availability['openai']:
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                max_tokens=50,
+                temperature=0.7
+            )
+            text = response.choices[0].message.content.strip()
+            openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+            results.append(openai_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Open AI: {str(e)}")
+            api_availability['openai'] = False
+            results.append(f"❌ Open AI خطا: {str(e)}")
 
-    # دکمه برگشت
-    reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]])
-    await send_admin_alert(context, "📋 نتایج تست:\n" + "\n".join(results), reply_markup=reply_markup)
+    return "\n".join(results)
 
 async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info("دکمه test_all")
     await query.answer()
-    msg = await query.message.edit_text("در حال اجرای تست‌ها... نتایج به‌زودی ارسال می‌شود")
-    asyncio.create_task(run_tests(context))
-    await msg.edit_text("✅ تست‌ها در پس‌زمینه اجرا شدند. نتایج به ادمین ارسال می‌شود.", reply_markup=get_tests_menu())
+    msg = await query.message.edit_text("در حال اجرای تست‌ها...")
+    try:
+        results = await run_tests(update, context)
+        await msg.edit_text(f"📋 نتایج تست:\n{results}", reply_markup=get_tests_menu())
+    except Exception as e:
+        logger.error(f"خطا در test_all: {str(e)}")
+        await msg.edit_text(f"❌ خطا در اجرای تست‌ها: {str(e)}", reply_markup=get_tests_menu())
 
 async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1055,65 +1115,6 @@ async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
         await msg.edit_text(f"❌ خطا در تست دسترسی به کانال: {str(e)}", reply_markup=get_tests_menu())
-
-async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    logger.info("دکمه stats")
-    await query.answer()
-    msg = await query.message.edit_text("در حال بررسی بازدید کانال...")
-    
-    try:
-        if not CHANNEL_ID:
-            raise Exception("CHANNEL_ID تنظیم نشده است. لطفاً CHANNEL_ID را در فایل .env بررسی کنید.")
-        
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
-            async with session.get(url) as response:
-                data = await response.json()
-                if not data.get('ok') or data['result']['status'] not in ['administrator', 'creator']:
-                    raise Exception("بات ادمین کانال نیست یا CHANNEL_ID اشتباه است. لطفاً مطمئن شوید که ربات ادمین است و CHANNEL_ID به شکل @channelname یا -1001234567890 تنظیم شده.")
-        
-        now = datetime.now()
-        views_week = []
-        posts_count = 0
-        
-        async with aiohttp.ClientSession() as session:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-100"
-            async with session.get(url) as response:
-                data = await response.json()
-                if not data.get('ok') or not data.get('result'):
-                    raise Exception("هیچ پیامی دریافت نشد. لطفاً حداقل یک پست در کانال منتشر کنید یا دسترسی ربات را بررسی کنید.")
-                
-                chat_id = CHANNEL_ID if CHANNEL_ID.startswith('-') else f"@{CHANNEL_ID.lstrip('@')}"
-                for update in data['result']:
-                    if 'channel_post' in update:
-                        post = update['channel_post']
-                        if str(post.get('chat', {}).get('id')) != chat_id and post.get('chat', {}).get('username') != chat_id:
-                            continue
-                        if not post.get('views'):
-                            continue
-                        message_time = datetime.fromtimestamp(post['date'])
-                        time_diff = now - message_time
-                        if time_diff <= timedelta(days=7):
-                            views_week.append(post['views'])
-                            posts_count += 1
-        
-        if not views_week:
-            raise Exception("هیچ پستی در 7 روز اخیر یافت نشد. لطفاً حداقل یک پست منتشر کنید یا CHANNEL_ID را بررسی کنید.")
-        
-        avg_week = sum(views_week) / len(views_week)
-        total_views = sum(views_week)
-        
-        result = (
-            f"📊 آمار بازدید کانال:\n"
-            f"- تعداد پست‌ها (7 روز اخیر): {posts_count}\n"
-            f"- مجموع بازدیدها: {total_views}\n"
-            f"- میانگین بازدید: {avg_week:.1f}"
-        )
-        await msg.edit_text(result, reply_markup=get_main_menu())
-    except Exception as e:
-        logger.error(f"خطا در بررسی بازدید: {str(e)}")
-        await msg.edit_text(f"❌ خطا در بررسی بازدید: {str(e)}", reply_markup=get_main_menu())
 
 async def show_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1233,7 +1234,6 @@ async def run_bot():
     app.add_handler(CallbackQueryHandler(post_now_handler, pattern='^post_now$'))
     app.add_handler(CallbackQueryHandler(test_all_handler, pattern='^test_all$'))
     app.add_handler(CallbackQueryHandler(test_channel_handler, pattern='^test_channel$'))
-    app.add_handler(CallbackQueryHandler(stats_handler, pattern='^stats$'))
     app.add_handler(CallbackQueryHandler(show_movies_handler, pattern='^show_movies$'))
     app.add_handler(CallbackQueryHandler(toggle_bot_handler, pattern='^toggle_bot$'))
     app.add_handler(CallbackQueryHandler(reset_webhook_handler, pattern='^reset_webhook$'))
