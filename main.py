@@ -17,7 +17,6 @@ from openai import AsyncOpenAI
 import aiohttp.client_exceptions
 import re
 import certifi
-import atexit
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
@@ -37,7 +36,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 PORT = int(os.getenv('PORT', 8080))
 POST_INTERVAL = int(os.getenv('POST_INTERVAL', 600))
-FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 604800))  # هر 7 روز
+FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 86400))
 
 # تنظیم Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -49,32 +48,11 @@ async def init_openai_client():
     global client
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# --- Cleanup برای خاموش‌سازی ---
-def cleanup():
-    logger.info("اجرای cleanup برای خاموش‌سازی...")
-    if 'bot_app' in globals() and bot_app.running:
-        asyncio.run(bot_app.updater.stop())
-        asyncio.run(bot_app.stop())
-        asyncio.run(bot_app.shutdown())
-    if 'web_runner' in globals():
-        asyncio.run(web_runner.cleanup())
-    if client:
-        asyncio.run(client.close())
-    logger.info("Cleanup کامل شد")
-
-atexit.register(cleanup)
-
-# --- وضعیت دسترسی APIها و زمان قطعی ---
+# --- وضعیت دسترسی APIها ---
 api_availability = {
     'gemini': True,
     'groq': True,
     'openai': True
-}
-
-api_downtime = {
-    'gemini': None,
-    'groq': None,
-    'openai': None
 }
 
 # --- کش و متغیرهای سراسری ---
@@ -84,10 +62,9 @@ last_fetch_time = datetime.now() - timedelta(days=1)
 previous_plots = []
 previous_comments = []
 bot_enabled = True
-fallback_count = 0
-api_cache = {}  # کش برای پاسخ‌های API
 CACHE_FILE = "movie_cache.json"
 POSTED_MOVIES_FILE = "posted_movies.json"
+API_CACHE = {}  # کش برای نتایج API
 
 # --- دیکشنری ترجمه ژانرها ---
 GENRE_TRANSLATIONS = {
@@ -112,60 +89,80 @@ GENRE_TRANSLATIONS = {
     'Unknown': 'سایر'
 }
 
-# --- فال‌بک‌ها ---
+# --- فال‌بک‌های خلاصه داستان و تحلیل (5 مورد برای هر ژانر، طولانی‌تر) ---
 FALLBACK_PLOTS = {
     'اکشن': [
-        "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟ پایان غیرمنتظره‌ای در انتظار است.",
-        "داستانی پر از تعقیب و گریز و انفجارهای مهیج. قهرمانی که برای عدالت می‌جنگد. موانع غیرمنتظره‌ای پیش روی اوست. آیا او پیروز خواهد شد؟",
-        "مبارزه‌ای حماسی برای نجات بشریت. صحنه‌های اکشن خیره‌کننده و داستانی پرتعلیق. چالش‌های بزرگی پیش روی قهرمان است. آیا پایان خوشی رقم خواهد خورد؟"
+        "جهانی پر از هرج‌ومرج که قهرمانی شجاع در برابر دشمنانی بی‌رحم می‌ایستد. نبردهای نفس‌گیر و تعقیب‌وگریزهای پرهیجان، قلب شما را به تپش می‌اندازد. آیا او می‌تواند عدالت را برقرار کند یا تاریکی پیروز خواهد شد؟",
+        "داستانی حماسی از یک ماموریت خطرناک برای نجات بشریت. صحنه‌های اکشن خیره‌کننده و نقشه‌های پیچیده دشمن، شما را تا لحظه آخر میخکوب می‌کند. آیا قهرمان موفق خواهد شد یا همه‌چیز به فاجعه ختم می‌شود؟",
+        "مبارزه‌ای بی‌امان در دنیایی که قانون وجود ندارد. قهرمانی تنها با مهارت‌های خارق‌العاده‌اش علیه سازمانی قدرتمند می‌جنگد. آیا او می‌تواند حقیقت را آشکار کند یا در این راه نابود خواهد شد؟",
+        "جهانی که در آستانه نابودی است و تنها یک نفر می‌تواند آن را نجات دهد. انفجارها، درگیری‌های مهیج و داستانی پر از خیانت، شما را به وجد می‌آورد. آیا پایان این ماجرا روشن خواهد بود؟",
+        "ماجراجویی‌ای پر از خطر که قهرمان با گذشته‌ای تاریک، برای رهایی از دشمنانش می‌جنگد. صحنه‌های اکشن پویا و داستانی عمیق، شما را تا پایان همراه می‌کند. آیا او به آرامش خواهد رسید؟",
     ],
     'درام': [
-        "داستانی عمیق از روابط انسانی و انتخاب‌های سخت. زندگی شخصیتی پیچیده که قلب شما را لمس می‌کند. تصمیمات او آینده را تغییر می‌دهند. آیا او راه خود را پیدا خواهد کرد؟",
-        "روایتی احساسی از چالش‌های زندگی و عشق. شخصیت‌ها با مشکلات بزرگی روبرو می‌شوند. تصمیم‌هایی که آینده را تغییر می‌دهند. آیا پایان خوشی در انتظار است؟",
-        "سفری احساسی در دل مشکلات زندگی. شخصیت‌هایی که با شجاعت مبارزه می‌کنند. روابط عمیقی که قلب را می‌فشارند. آیا امید پیروز می‌شود؟"
+        "روایتی عمیق از زندگی مردی که با انتخاب‌های سخت و روابط پیچیده روبروست. گذشته او سایه‌ای سنگین بر آینده‌اش انداخته و هر تصمیم، سرنوشتش را تغییر می‌دهد. آیا او می‌تواند راه خود را پیدا کند یا در غم غرق خواهد شد؟",
+        "داستانی احساسی از عشق، ازدست‌رفتن و تلاش برای بازسازی زندگی. شخصیت‌هایی که با شجاعت در برابر مشکلات ایستادگی می‌کنند، قلب شما را لمس خواهند کرد. آیا امیدی برای پایان خوش وجود دارد؟",
+        "سفری درونی در دل چالش‌های زندگی که شخصیت اصلی را به مرزهای احساسی‌اش می‌برد. روابط خانوادگی و رازهای پنهان، داستان را به اوج می‌رسانند. آیا حقیقت او را آزاد خواهد کرد؟",
+        "روایتی تکان‌دهنده از مبارزه یک انسان با خودش و دنیای اطرافش. هر لحظه پر از احساسات عمیق و تصمیم‌هایی است که آینده را رقم می‌زنند. آیا او به آرامش خواهد رسید یا در تنهایی غرق می‌شود؟",
+        "داستانی که زندگی یک خانواده را در بزنگاهی حساس به تصویر می‌کشد. عشق، خیانت و بخشش در هم تنیده شده‌اند تا شما را به فکر فرو ببرند. آیا این خانواده دوباره متحد خواهد شد؟",
     ],
     'کمدی': [
-        "ماجراهای خنده‌داری که زندگی را زیرورو می‌کنند. گروهی از دوستان که در موقعیت‌های عجیب گیر می‌افتند. شوخی‌های بامزه شما را سرگرم می‌کنند. آیا از این مخمصه خلاص می‌شوند؟",
-        "داستانی پر از شوخی و موقعیت‌های بامزه. شخصیت‌هایی که شما را به خنده می‌اندازند. ماجراهای غیرمنتظره‌ای در انتظار است. آیا همه‌چیز به خیر می‌گذرد؟",
-        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. ماجراهایی که خنده را به لب‌هایتان می‌آورد. شخصیت‌های دوست‌داشتنی و موقعیت‌های خنده‌دار. آیا پایان شادی رقم می‌خورد؟"
+        "ماجراهای خنده‌داری که گروهی از دوستان را در موقعیت‌های عجیب و غریب قرار می‌دهد. شوخی‌های هوشمندانه و دیالوگ‌های طنزآمیز، شما را از خنده روده‌بر می‌کند. آیا آن‌ها از این مخمصه‌ها جان سالم به در می‌برند؟",
+        "داستانی پر از سوءتفاهم‌های بامزه که زندگی شخصیت اصلی را زیرورو می‌کند. هر لحظه پر از خنده و موقعیت‌های غیرمنتظره است که شما را سرگرم می‌کند. آیا همه‌چیز به خیر و خوشی تمام خواهد شد؟",
+        "کمدی‌ای که با طنز ظریف و شخصیت‌های دوست‌داشتنی، شما را به دنیایی شاد می‌برد. ماجراهای غیرمنتظره و دیالوگ‌های بامزه، لحظات خوشی را رقم می‌زنند. آیا پایان این داستان به اندازه شروعش خنده‌دار خواهد بود؟",
+        "روایتی طنزآمیز از تلاش یک فرد معمولی برای رسیدن به هدفی بزرگ. موقعیت‌های خنده‌دار و شخصیت‌های عجیب، شما را تا آخر همراه می‌کنند. آیا او موفق خواهد شد یا باز هم همه‌چیز خراب می‌شود؟",
+        "داستانی که با شوخی‌های پیاپی و ماجراهای بامزه، شما را به خنده می‌اندازد. گروهی از افراد درگیر موقعیتی غیرعادی می‌شوند که راه فراری از آن نیست. آیا این ماجرا به پایان خوشی خواهد رسید؟",
     ],
     'علمی_تخیلی': [
-        "جهانی در آینده که تکنولوژی همه‌چیز را تغییر داده. ماجراجویی‌ای برای کشف حقیقت پشت یک راز بزرگ. چالش‌های عجیبی پیش روی قهرمانان است. آیا بشریت نجات پیدا می‌کند؟",
-        "داستانی از سفر در زمان و فضا. اکتشافاتی که جهان را دگرگون می‌کنند. موانع غیرمنتظره‌ای در مسیر است. آیا حقیقت آشکار خواهد شد؟",
-        "ماجراجویی‌ای در فضایی ناشناخته. فناوری‌های عجیب و داستانی پیچیده. قهرمانان با خطراتی بزرگ روبرو می‌شوند. آیا موفق خواهند شد؟"
+        "جهانی در آینده که فناوری‌های پیشرفته، بشریت را به مرزهای جدیدی برده است. اکتشافاتی خطرناک و رازهایی پنهان، شما را به فکر فرو می‌برند. آیا حقیقت آشکار خواهد شد یا بشریت نابود می‌شود؟",
+        "داستانی از سفر در زمان که قوانین واقعیت را به چالش می‌کشد. شخصیت‌هایی که با پارادوکس‌های پیچیده روبرو می‌شوند، شما را میخکوب می‌کنند. آیا آن‌ها می‌توانند تاریخ را تغییر دهند؟",
+        "ماجراجویی‌ای در فضایی ناشناخته که موجودات بیگانه و فناوری‌های عجیب را به تصویر می‌کشد. داستان پر از هیجان و معما، شما را تا پایان همراه می‌کند. آیا بشریت در این جهان تنها خواهد ماند؟",
+        "روایتی از جهانی که هوش مصنوعی کنترل را به دست گرفته است. مبارزه‌ای برای بقا و کشف حقیقت، شما را درگیر خود می‌کند. آیا انسان‌ها دوباره کنترل را به دست خواهند گرفت؟",
+        "داستانی که در سیاره‌ای دور رخ می‌دهد و گروهی از کاوشگران را در برابر ناشناخته‌ها قرار می‌دهد. اکتشافات علمی و خطرات غیرمنتظره، شما را به وجد می‌آورد. آیا آن‌ها به خانه بازخواهند گشت؟",
     ],
     'سایر': [
-        "داستانی جذاب که شما را به سفری غیرمنتظره می‌برد. شخصیت‌هایی که با چالش‌های بزرگ روبرو می‌شوند. ماجراهایی که قلب و ذهن را درگیر می‌کنند. آیا پایان خوشی در انتظار است؟",
-        "روایتی متفاوت که شما را غافلگیر می‌کند. ماجراهایی که قلب و ذهن را درگیر می‌کنند. شخصیت‌هایی که با شجاعت پیش می‌روند. آیا همه‌چیز درست می‌شود؟",
-        "داستانی که شما را به دنیایی جدید می‌برد. شخصیت‌هایی که با مشکلات غیرمنتظره روبرو می‌شوند. ماجراهای هیجان‌انگیز و احساسی. آیا پایان رضایت‌بخشی خواهد داشت؟"
+        "داستانی متفاوت که شما را به سفری غیرمنتظره در دنیایی ناشناخته می‌برد. شخصیت‌هایی با گذشته‌های پیچیده و تصمیم‌هایی که سرنوشت را تغییر می‌دهند. آیا پایان این ماجرا شما را شگفت‌زده خواهد کرد؟",
+        "روایتی جذاب از زندگی و مبارزه برای یافتن معنا در جهانی پر از ابهام. هر لحظه پر از احساسات و معماهایی است که شما را به فکر فرو می‌برند. آیا حقیقت در پایان آشکار خواهد شد؟",
+        "ماجراجویی‌ای که با ترکیبی از احساسات و هیجان، شما را درگیر خود می‌کند. شخصیت‌هایی که با شجاعت در برابر ناشناخته‌ها می‌ایستند. آیا این داستان پایانی خوش خواهد داشت؟",
+        "داستانی که شما را به دنیایی پر از رمز و راز می‌برد و هر لحظه غافلگیری جدیدی دارد. روابط انسانی و انتخاب‌های سخت، قلب و ذهن شما را تسخیر می‌کنند. آیا پایان این سفر رضایت‌بخش خواهد بود؟",
+        "روایتی که با پیچش‌های داستانی و شخصیت‌های عمیق، شما را تا لحظه آخر نگه می‌دارد. هر تصمیم، آینده‌ای جدید را رقم می‌زند. آیا این داستان به پایان خوشی خواهد رسید؟",
     ]
 }
 
 FALLBACK_COMMENTS = {
     'اکشن': [
-        "این فیلم با صحنه‌های اکشن نفس‌گیر و داستان پرهیجان، شما را به صندلی میخکوب می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده، تجربه‌ای بی‌نظیر خلق کرده‌اند. بازیگران با انرژی تمام نقش‌ها را به تصویر کشیده‌اند. فقط گاهی ریتم تند ممکن است کمی گیج‌کننده باشد.",
-        "فیلمی پر از هیجان و صحنه‌های اکشن تماشایی که تا آخر شما را نگه می‌دارد. داستان سرگرم‌کننده و بازیگری قوی، آن را به اثری جذاب تبدیل کرده است. جلوه‌های ویژه بسیار باکیفیت هستند. فقط برخی لحظات ممکن است قابل پیش‌بینی به نظر برسند.",
-        "اکشنی پرشور با داستانی مهیج که لحظه‌ای آرامش به شما نمی‌دهد. کارگردانی خلاقانه و موسیقی متن حماسی، حس و حال خاصی به فیلم داده‌اند. بازیگران عملکردی قابل تحسین دارند. فقط برخی دیالوگ‌ها می‌توانستند قوی‌تر باشند."
+        "این فیلم با صحنه‌های اکشن پویا و کارگردانی بی‌نقص، تجربه‌ای نفس‌گیر را ارائه می‌دهد. داستان پر از هیجان و شخصیت‌پردازی قوی، شما را تا لحظه آخر درگیر نگه می‌دارد. با این حال، برخی لحظات ممکن است برای مخاطبان حساس کمی خشن به نظر برسند.",
+        "فیلمی که با ریتم تند و جلوه‌های بصری خیره‌کننده، استانداردهای ژانر اکشن را بازتعریف می‌کند. بازیگران با شیمی عالی و داستان پر از تعلیق، ارزش تماشای چندباره را دارد. تنها نقطه ضعف، دیالوگ‌هایی است که گاهی کلیشه‌ای به نظر می‌رسند.",
+        "اکشنی حماسی که با نبردهای تماشایی و داستانی عمیق، شما را به دنیایی پر از خطر می‌برد. کارگردانی خلاقانه و موسیقی متن قدرتمند، تجربه‌ای سینمایی را کامل می‌کنند. فقط برخی صحنه‌ها ممکن است بیش از حد طولانی باشند.",
+        "این فیلم با ترکیبی از اکشن بی‌وقفه و داستانی پر از خیانت، شما را میخکوب می‌کند. جلوه‌های ویژه و طراحی صحنه‌ها در سطحی بی‌نظیر هستند. با این حال، پیچیدگی برخی خطوط داستانی ممکن است نیاز به توجه بیشتری داشته باشد.",
+        "داستانی پر از آدرنالین که با صحنه‌های اکشن خلاقانه و شخصیت‌هایی به‌یادماندنی، شما را سرگرم می‌کند. کارگردانی پرانرژی و موسیقی متن حماسی، نقاط قوت اصلی آن هستند. فقط پایان‌بندی ممکن است برای برخی غیرمنتظره باشد.",
     ],
     'درام': [
-        "این فیلم با داستانی عمیق و احساسی، قلب شما را تسخیر می‌کند. بازیگری بی‌نقص و کارگردانی حساس، آن را به اثری ماندگار تبدیل کرده‌اند. موسیقی متن تأثیرگذار، احساسات را تقویت می‌کند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
-        "روایتی تکان‌دهنده از زندگی و احساسات انسانی که شما را به فکر فرو می‌برد. فیلم‌برداری زیبا و شخصیت‌پردازی قوی، فیلم را خاص کرده‌اند. داستان عمیق و چندلایه است. فقط پایان ممکن است برای همه رضایت‌بخش نباشد.",
-        "داستانی احساسی که شما را به سفری عمیق در روابط انسانی می‌برد. کارگردانی هنرمندانه و بازیگری قوی، لحظات تأثیرگذاری خلق کرده‌اند. موسیقی متن به‌خوبی حس فیلم را منتقل می‌کند. فقط برخی لحظات ممکن است بیش از حد طولانی باشند."
+        "این فیلم با روایتی عمیق و احساسی، شما را به سفری در دل روابط انسانی می‌برد. بازیگری بی‌نقص و فیلم‌برداری هنرمندانه، هر صحنه را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی لحظات ممکن است برای مخاطبان عجول چالش‌برانگیز باشد.",
+        "داستانی تکان‌دهنده که با کاوش در احساسات و انتخاب‌های سخت، قلب شما را تسخیر می‌کند. موسیقی متن تأثیرگذار و کارگردانی حساس، تجربه‌ای عاطفی را رقم می‌زنند. با این حال، پایان‌بندی ممکن است برای همه رضایت‌بخش نباشد.",
+        "روایتی که با شخصیت‌پردازی قوی و دیالوگ‌های عمیق، شما را به فکر فرو می‌برد. هر لحظه پر از احساساتی است که شما را با شخصیت‌ها همراه می‌کند. فقط برخی صحنه‌های طولانی ممکن است نیاز به صبر بیشتری داشته باشند.",
+        "این فیلم با داستانی چندلایه و بازیگری فوق‌العاده، شما را درگیر احساسات پیچیده‌ای می‌کند. کارگردانی دقیق و فیلم‌برداری زیبا، هر فریم را به یک تابلوی نقاشی تبدیل کرده‌اند. فقط برخی موضوعات سنگین ممکن است برای همه مناسب نباشند.",
+        "داستانی که با ظرافت به مسائل انسانی می‌پردازد و شما را به تأمل وامی‌دارد. بازیگران با اجراهای قدرتمند و موسیقی متن احساسی، این اثر را به‌یادماندنی کرده‌اند. با این حال، برخی لحظات ممکن است بیش از حد غم‌انگیز باشند.",
     ],
     'کمدی': [
-        "این فیلم با شوخی‌های بامزه و داستان سرگرم‌کننده، شما را به خنده می‌اندازد. بازیگران شیمی فوق‌العاده‌ای دارند و کارگردانی پرانرژی است. دیالوگ‌های هوشمندانه، لحظات شادی خلق می‌کنند. فقط برخی جوک‌ها ممکن است تکراری به نظر برسند.",
-        "داستانی سبک و خنده‌دار که حال شما را خوب می‌کند. شخصیت‌پردازی قوی و طنز هوشمندانه، فیلم را جذاب کرده‌اند. بازیگران با مهارت لحظات بامزه‌ای خلق کرده‌اند. فقط ریتم در برخی صحنه‌ها ممکن است افت کند.",
-        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. ماجراهای خنده‌دار و شخصیت‌های دوست‌داشتنی، تجربه‌ای شاد ایجاد کرده‌اند. کارگردانی خلاقانه است. فقط برخی شوخی‌ها ممکن است به مذاق همه خوش نیاید."
+        "این فیلم با طنز هوشمندانه و شخصیت‌های دوست‌داشتنی، شما را به خنده وامی‌دارد. دیالوگ‌های بامزه و کارگردانی پرانرژی، لحظات شادی را رقم می‌زنند. فقط برخی شوخی‌ها ممکن است به مذاق همه خوش نیایند.",
+        "کمدی‌ای که با موقعیت‌های خنده‌دار و بازیگری عالی، حال شما را خوب می‌کند. داستان روان و شیمی بین بازیگران، آن را به اثری سرگرم‌کننده تبدیل کرده است. با این حال، ریتم در برخی صحنه‌ها ممکن است کمی افت کند.",
+        "داستانی پر از شوخی‌های پیاپی که با کارگردانی خلاقانه، شما را سرگرم می‌کند. شخصیت‌های عجیب و غریب و دیالوگ‌های طنزآمیز، نقاط قوت اصلی آن هستند. فقط برخی جوک‌ها ممکن است برای مخاطبان خاص جذاب نباشند.",
+        "این فیلم با طنزی ظریف و ماجراهای غیرمنتظره، شما را به دنیایی پر از خنده می‌برد. بازیگران با اجراهای درخشان و داستان بامزه، تجربه‌ای لذت‌بخش را ارائه می‌دهند. فقط برخی لحظات ممکن است بیش از حد اغراق‌آمیز باشند.",
+        "روایتی طنزآمیز که با شوخی‌های خلاقانه و شخصیت‌پردازی قوی، شما را تا پایان همراه می‌کند. کارگردانی پویا و موسیقی متن شاد، این اثر را به یک کمدی به‌یادماندنی تبدیل کرده‌اند. فقط پایان‌بندی ممکن است کمی غیرمنتظره باشد.",
     ],
     'علمی_تخیلی': [
-        "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به دنیایی دیگر می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی، تجربه‌ای بی‌نظیر خلق کرده‌اند. بازیگران نقش‌ها را به‌خوبی ایفا کرده‌اند. فقط برخی مفاهیم ممکن است پیچیده باشند.",
-        "جهانی فانتزی که با داستان‌سرایی قوی شما را مجذوب می‌کند. تکنولوژی‌های تخیلی و کارگردانی خلاقانه، فیلم را دیدنی کرده‌اند. بازیگری قوی و داستان پیچیده است. فقط برخی جزئیات ممکن است گنگ باشند.",
-        "داستانی علمی‌تخیلی که ذهن شما را به چالش می‌کشد. جلوه‌های ویژه و داستان‌سرایی خلاقانه، تجربه‌ای متفاوت خلق کرده‌اند. شخصیت‌پردازی قوی است. فقط ممکن است برای همه قابل فهم نباشد."
+        "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به آینده‌ای ناشناخته می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی، تجربه‌ای سینمایی را کامل می‌کنند. فقط برخی مفاهیم پیچیده ممکن است نیاز به توجه بیشتری داشته باشند.",
+        "داستانی که با کاوش در فناوری‌های تخیلی و معضلات اخلاقی، ذهن شما را به چالش می‌کشد. فیلم‌برداری خیره‌کننده و بازیگری قوی، آن را به اثری ماندگار تبدیل کرده‌اند. با این حال، برخی جزئیات ممکن است برای همه قابل فهم نباشند.",
+        "روایتی علمی‌تخیلی که با ایده‌های نوآورانه و داستانی پر از معما، شما را مجذوب می‌کند. جلوه‌های ویژه و طراحی صحنه‌ها در سطحی بی‌نظیر هستند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
+        "این فیلم با ترکیبی از اکتشافات علمی و درام انسانی، شما را به دنیایی متفاوت می‌برد. کارگردانی خلاقانه و شخصیت‌پردازی عمیق، نقاط قوت اصلی آن هستند. فقط برخی موضوعات ممکن است برای مخاطبان عام سنگین باشند.",
+        "داستانی که با فناوری‌های پیشرفته و معماهای فلسفی، شما را درگیر خود می‌کند. بازیگران با اجراهای قدرتمند و جلوه‌های بصری تماشایی، این اثر را به‌یادماندنی کرده‌اند. فقط پایان‌بندی ممکن است برای برخی مبهم باشد.",
     ],
     'سایر': [
-        "فیلمی که با داستان‌سرایی جذاب و کارگردانی قوی، شما را سرگرم می‌کند. بازیگری خوب و روایت روان، تجربه‌ای دلپذیر خلق کرده‌اند. موسیقی متن به‌خوبی حس فیلم را منتقل می‌کند. فقط برخی لحظات ممکن است کند باشند.",
-        "داستانی متفاوت که شما را غافلگیر می‌کند. کارگردانی هنرمندانه و بازیگری قوی، فیلم را دیدنی کرده‌اند. داستان چندلایه و جذاب است. فقط برخی صحنه‌ها ممکن است طولانی به نظر برسند.",
-        "فیلمی که شما را به دنیایی جدید می‌برد. شخصیت‌هایی که با مشکلات غیرمنتظره روبرو می‌شوند، داستانی هیجان‌انگیز خلق کرده‌اند. کارگردانی خلاقانه است. فقط پایان ممکن است برای همه خوشایند نباشد."
+        "این فیلم با داستانی جذاب و کارگردانی قوی، شما را به سفری غیرمنتظره می‌برد. بازیگری عالی و روایت روان، آن را به اثری سرگرم‌کننده تبدیل کرده‌اند. فقط برخی لحظات ممکن است برای مخاطبان خاص کند به نظر برسند.",
+        "روایتی متفاوت که با پیچش‌های داستانی و شخصیت‌های عمیق، شما را غافلگیر می‌کند. فیلم‌برداری زیبا و موسیقی متن تأثیرگذار، تجربه‌ای سینمایی را رقم می‌زنند. با این حال، برخی صحنه‌ها ممکن است نیاز به صبر بیشتری داشته باشند.",
+        "داستانی که با ترکیبی از احساسات و هیجان، شما را درگیر خود می‌کند. کارگردانی خلاقانه و بازیگری قوی، این اثر را به‌یادماندنی کرده‌اند. فقط برخی موضوعات ممکن است برای همه جذاب نباشند.",
+        "این فیلم با روایتی چندلایه و شخصیت‌پردازی عمیق، شما را به فکر فرو می‌برد. جلوه‌های بصری و موسیقی متن، هر صحنه را به اثری هنری تبدیل کرده‌اند. فقط ریتم برخی صحنه‌ها ممکن است برای مخاطبان عجول چالش‌برانگیز باشد.",
+        "داستانی که با کاوش در روابط انسانی و معماهای زندگی، شما را مجذوب می‌کند. بازیگران با اجراهای درخشان و کارگردانی حساس، این اثر را به‌یادماندنی کرده‌اند. فقط پایان‌بندی ممکن است برای برخی غیرمنتظره باشد.",
     ]
 }
 
@@ -179,32 +176,31 @@ api_errors = {
 def clean_text(text):
     if not text or text == 'N/A':
         return None
-    return text[:300]
+    return text[:500]  # افزایش محدودیت متن به 500 کاراکتر
 
 def shorten_plot(text, max_sentences=3):
     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
     return '. '.join(sentences[:max_sentences]) + ('.' if sentences else '')
 
 def clean_text_for_validation(text):
-    """تمیز کردن متن برای اعتبارسنجی"""
     if not text:
         return ""
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'[\n\t]', ' ', text)
-    return text.strip()
+    text = text.strip()
+    return text
 
 def is_farsi(text):
     farsi_chars = r'[\u0600-\u06FF]'
     return bool(re.search(farsi_chars, text))
 
 def is_valid_plot(text):
-    if not text or len(text.split()) < 5:
+    if not text or len(text.split()) < 10:  # حداقل 10 کلمه برای خلاصه داستان
         return False
     sentences = text.split('. ')
-    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
+    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 2  # حداقل 2 جمله
 
 def is_valid_comment(text):
-    """چک کردن معتبر بودن تحلیل: حداقل 4 جمله، 50 کلمه و فارسی بودن"""
     if not text:
         return False
     text = clean_text_for_validation(text)
@@ -212,12 +208,8 @@ def is_valid_comment(text):
         logger.warning(f"تحلیل رد شد: متن غیرفارسی - {text}")
         return False
     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
-    words = len(text.split())
-    if len(sentences) < 4:
-        logger.warning(f"تحلیل رد شد: کمتر از 4 جمله - {text}")
-        return False
-    if words < 50:
-        logger.warning(f"تحلیل رد شد: کمتر از 50 کلمه - {text}")
+    if len(sentences) < 3:
+        logger.warning(f"تحلیل رد شد: کمتر از 3 جمله - {text}")
         return False
     if text in previous_comments:
         logger.warning(f"تحلیل رد شد: متن تکراری - {text}")
@@ -233,16 +225,28 @@ def get_fallback_by_genre(options, genres):
     available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
     return random.choice(available) if available else options['سایر'][0]
 
-async def make_api_request(url, retries=5, timeout=15, headers=None):
-    # چک کردن کش
-    if url in api_cache and (datetime.now() - api_cache[url]['timestamp']).total_seconds() < 3600:
-        logger.info(f"استفاده از کش برای {url}")
-        return api_cache[url]['data']
+async def cache_api_request(url, retries=5, timeout=15, headers=None):
+    """کش‌گذاری نتایج درخواست‌های API برای حداقل 1 ساعت"""
+    current_time = datetime.now()
+    if url in API_CACHE:
+        cached_data, timestamp = API_CACHE[url]
+        if (current_time - timestamp).total_seconds() < 3600:  # 1 ساعت
+            logger.info(f"استفاده از داده کش‌شده برای {url}")
+            return cached_data
+        else:
+            logger.info(f"کش منقضی شده برای {url}")
     
+    data = await make_api_request(url, retries, timeout, headers)
+    if data:
+        API_CACHE[url] = (data, current_time)
+        logger.info(f"داده جدید کش شد برای {url}")
+    return data
+
+async def make_api_request(url, retries=5, timeout=15, headers=None):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
-                async with session.get(url, headers=headers) as response:
+                async with session.get(url, headers=headers, ssl=certifi.where()) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
                         await asyncio.sleep(2 ** attempt)
@@ -254,8 +258,6 @@ async def make_api_request(url, retries=5, timeout=15, headers=None):
                         logger.error(f"خطای {response.status}: {await response.text()}")
                         return None
                     data = await response.json()
-                    # ذخیره در کش
-                    api_cache[url] = {'data': data, 'timestamp': datetime.now()}
                     return data
         except aiohttp.client_exceptions.ClientConnectorError as e:
             logger.error(f"خطای اتصال (تلاش {attempt + 1}): {str(e)}")
@@ -278,7 +280,7 @@ async def post_api_request(url, data, headers, retries=3, timeout=15):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
-                async with session.post(url, json=data, headers=headers) as response:
+                async with session.post(url, json=data, headers=headers, ssl=certifi.where()) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
                         await asyncio.sleep(2 ** attempt)
@@ -311,7 +313,7 @@ async def get_imdb_score_tmdb(title, genres=None):
     logger.info(f"دریافت اطلاعات TMDB برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-    data = await make_api_request(url)
+    data = await cache_api_request(url)
     if not data or not data.get('results'):
         logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
         api_errors['tmdb'] += 1
@@ -327,7 +329,7 @@ async def get_imdb_score_tmdb(title, genres=None):
         is_documentary = 'مستند' in genres
     else:
         details_url = f"https://api.themoviedb.org/3/movie/{movie.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
-        details_data = await make_api_request(details_url)
+        details_data = await cache_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
         is_animation = 'انیمیشن' in genres
         is_documentary = 'مستند' in genres
@@ -347,12 +349,12 @@ async def get_imdb_score_omdb(title, genres=None):
     logger.info(f"دریافت اطلاعات OMDb برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-    data = await make_api_request(url)
+    data = await cache_api_request(url)
     if not data or data.get('Response') == 'False':
         logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
         api_errors['omdb'] += 1
         return None
-    imdb_score = data.get('imdbRating', 'N/A')
+    imdb_score = data.get('imdbRating', '0')
     
     # چک کردن ژانرها
     is_animation = False
@@ -370,21 +372,12 @@ async def get_imdb_score_omdb(title, genres=None):
         logger.warning(f"فیلم {title} مستند است، رد شد")
         return None
     
-    if imdb_score == 'N/A':
-        logger.warning(f"فیلم {title} امتیاز IMDb ندارد، رد شد")
-        return None
-    
     min_score = 8.0 if is_animation else 6.0
-    try:
-        score_float = float(imdb_score)
-        if score_float < min_score:
-            logger.warning(f"فیلم {title} امتیاز {score_float} دارد، رد شد (حداقل {min_score} لازم است)")
-            return None
-        api_errors['omdb'] = 0
-        return f"{score_float:.1f}/10"
-    except ValueError:
-        logger.warning(f"امتیاز IMDb برای {title} نامعتبر است: {imdb_score}")
+    if float(imdb_score) < min_score:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
         return None
+    api_errors['omdb'] = 0
+    return f"{float(imdb_score):.1f}/10"
 
 async def check_poster(url):
     try:
@@ -393,7 +386,7 @@ async def check_poster(url):
                 if response.status != 200:
                     return False
                 content_length = response.headers.get('Content-Length')
-                if content_length and int(content_length) > 2 * 1024 * 1024:  # 2MB
+                if content_length and int(content_length) > 2 * 1024 * 1024:  # محدود به 2MB
                     logger.warning(f"پوستر {url} بیش از حد بزرگ است")
                     return False
                 return True
@@ -456,25 +449,28 @@ async def get_movie_info(title):
     logger.info(f"تلاش با TMDB برای {title}")
     encoded_title = urllib.parse.quote(title)
     search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-    tmdb_data_en = await make_api_request(search_url_en)
+    tmdb_data_en = await cache_api_request(search_url_en)
     if tmdb_data_en and tmdb_data_en.get('results'):
         movie = tmdb_data_en['results'][0]
         movie_id = movie.get('id')
         tmdb_title = movie.get('title', title)
-        tmdb_poster = f"https://image.tmdb.org/t/p/w185{movie.get('poster_path')}" if movie.get('poster_path') else None
+        tmdb_poster = f"https://image.tmdb.org/t/p/w300{movie.get('poster_path')}" if movie.get('poster_path') else None  # سایز کوچکتر
         
         details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
-        details_data = await make_api_request(details_url)
+        details_data = await cache_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
+        if 'مستند' in genres:
+            logger.warning(f"فیلم {tmdb_title} مستند است، رد شد")
+            return None
         
         search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
-        tmdb_data_fa = await make_api_request(search_url_fa)
+        tmdb_data_fa = await cache_api_request(search_url_fa)
         tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
         tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
         
         trailer = None
         videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}&language=en"
-        videos_data = await make_api_request(videos_url)
+        videos_data = await cache_api_request(videos_url)
         if videos_data and videos_data.get('results'):
             for video in videos_data['results']:
                 if video['type'] == 'Trailer' and video['site'] == 'YouTube':
@@ -496,17 +492,19 @@ async def get_movie_info(title):
                 'imdb': imdb_score,
                 'trailer': trailer,
                 'poster': tmdb_poster,
-                'genres': genres[:3],
-                'id': movie_id
+                'genres': genres[:3]
             }
     
     # 2. OMDb
-    logger.info(f"تل       با OMDb برای {title}")
+    logger.info(f"تلاش با OMDb برای {title}")
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-    omdb_data = await make_api_request(omdb_url)
+    omdb_data = await cache_api_request(omdb_url)
     if omdb_data and omdb_data.get('Response') == 'True':
         genres = omdb_data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+        if 'مستند' in genres:
+            logger.warning(f"فیلم {title} مستند است، رد شد")
+            return None
         imdb_score = await get_imdb_score_omdb(omdb_data.get('Title', title), genres)
         if imdb_score:
             plot = omdb_data.get('Plot', '')
@@ -514,232 +512,622 @@ async def get_movie_info(title):
             previous_plots.append(plot)
             if len(previous_plots) > 10:
                 previous_plots.pop(0)
-            omdb_poster = omdb_data.get('Poster', '')
-            omdb_poster = omdb_poster if omdb_poster and await check_poster(omdb_poster) else None
             return {
                 'title': omdb_data.get('Title', title),
                 'year': omdb_data.get('Year', 'N/A'),
                 'plot': plot,
                 'imdb': imdb_score,
                 'trailer': None,
-                'poster': omdb_poster,
-                'genres': genres[:3],
-                'id': omdb_data.get('imdbID')
+                'poster': omdb_data.get('Poster', None),
+                'genres': genres[:3]
             }
     
-    logger.error(f"هیچ اطلاعات معتبری برای {title} یافت نشد")
-    return None
-
-async def fetch_movies_to_cache():
-    global cached_movies, last_fetch_time
-    logger.info("دریافت فیلم‌های جدید برای کش...")
-    
-    page = 1
-    max_pages = 3
-    new_movies = []
-    
-    while page <= max_pages:
-        url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page={page}"
-        data = await make_api_request(url)
-        if not data or not data.get('results'):
-            logger.error(f"دریافت فیلم‌ها از TMDB ناموفق بود در صفحه {page}")
-            break
-        
-        for movie in data['results']:
-            title = movie.get('title')
-            genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in movie.get('genres', [])]
-            if 'مستند' in genres:
-                logger.info(f"فیلم {title} مستند است، رد شد")
-                continue
-            movie_info = await get_movie_info(title)
-            if movie_info and movie_info['id'] not in posted_movies:
-                new_movies.append(movie_info)
-        
-        page += 1
-    
-    if not new_movies:
-        logger.warning("هیچ فیلم جدیدی برای کش یافت نشد")
-        await send_admin_alert(None, "⚠️ هیچ فیلم جدیدی برای کش یافت نشد. احتمالاً مشکل از APIهای TMDB یا OMDb است یا همه فیلم‌ها قبلاً ارسال شده‌اند.")
-        return
-    
-    cached_movies = new_movies
-    last_fetch_time = datetime.now()
-    await save_cache_to_file()
-    logger.info(f"کش با موفقیت آپدیت شد در {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {len(cached_movies)} فیلم")
-
-async def get_random_movie():
-    global cached_movies, last_fetch_time
-    await load_cache_from_file()
-    await load_posted_movies_from_file()
-    
-    if not cached_movies or (datetime.now() - last_fetch_time).seconds > FETCH_INTERVAL:
-        logger.info("کش خالی یا قدیمی، آپدیت کش...")
-        await fetch_movies_to_cache()
-    
-    if not cached_movies:
-        logger.error("کش فیلم‌ها خالی است، ارسال پست لغو شد")
-        await send_admin_alert(None, "⚠️ کش فیلم‌ها خالی است. لطفاً APIهای TMDB و OMDb را بررسی کنید یا کش را به‌صورت دستی آپدیت کنید.")
-        return None
-    
-    available_movies = [m for m in cached_movies if m['id'] not in posted_movies]
-    if not available_movies:
-        logger.warning("هیچ فیلم جدیدی در کش نیست، ارسال پست لغو شد")
-        await send_admin_alert(None, "⚠️ هیچ فیلم جدیدی در کش نیست. همه فیلم‌های موجود قبلاً ارسال شده‌اند یا مستند هستند.")
-        return None
-    
-    for movie in available_movies:
-        if 'مستند' in movie['genres']:
-            logger.warning(f"فیلم {movie['title']} مستند است، رد شد")
-            continue
-        posted_movies.append(movie['id'])
-        await save_posted_movies_to_file()
-        return movie
-    
-    logger.warning("هیچ فیلم غیرمستندی یافت نشد، ارسال پست لغو شد")
-    await send_admin_alert(None, "⚠️ هیچ فیلم غیرمستندی در کش یافت نشد. لطفاً کش را بررسی کنید.")
+    logger.error(f"هیچ API برای {title} جواب نداد")
+    if api_errors['tmdb'] > 5 or api_errors['omdb'] > 5:
+        await send_admin_alert(None, f"⚠️ هشدار: APIهای متعدد ({api_errors}) خطا دارند. لطفاً کلیدهای TMDB و OMDb را بررسی کنید.")
     return None
 
 async def generate_comment(genres):
-    global fallback_count
     logger.info("تولید تحلیل...")
-    comment = None
-    
-    # Gemini
+
+    # 1. Gemini
     if api_availability['gemini']:
         logger.info("تلاش با Gemini")
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = "یک تحلیل جذاب و حرفه‌ای به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 4 جمله کامل (هر جمله با نقطه پایان یابد) و حداقل 50 کلمه. لحن سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
-            response = await model.generate_content_async(prompt)
-            text = response.text.strip()
-            if is_valid_comment(text):
-                comment = text
-                previous_comments.append(comment)
-                if len(previous_comments) > 10:
-                    previous_comments.pop(0)
-                api_availability['gemini'] = True
-                api_downtime['gemini'] = None
-                fallback_count = 0
-                return comment
-            else:
-                logger.warning(f"تحلیل Gemini رد شد: {text}")
-        except google_exceptions.GoogleAPIError as e:
+            async with asyncio.timeout(15):
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                prompt = "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد."
+                response = await model.generate_content_async(prompt)
+                text = clean_text_for_validation(response.text.strip())
+                if is_valid_comment(text):
+                    previous_comments.append(text)
+                    if len(previous_comments) > 10:
+                        previous_comments.pop(0)
+                    logger.info("تحلیل Gemini با موفقیت دریافت شد")
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                logger.warning(f"تحلیل Gemini نامعتبر: {text}")
+        except google_exceptions.ResourceExhausted:
+            logger.error("خطا: توکن Gemini تمام شده است")
+            api_availability['gemini'] = False
+            await send_admin_alert(None, "❌ توکن Gemini تمام شده است.")
+        except Exception as e:
             logger.error(f"خطا در Gemini API: {str(e)}")
             api_availability['gemini'] = False
-            if api_downtime['gemini'] is None:
-                api_downtime['gemini'] = datetime.now()
             await send_admin_alert(None, f"❌ خطا در Gemini: {str(e)}.")
-        except Exception as e:
-            logger.error(f"خطای غیرمنتظره در Gemini: {str(e)}")
-            api_availability['gemini'] = False
-            if api_downtime['gemini'] is None:
-                api_downtime['gemini'] = datetime.now()
-            await send_admin_alert(None, f"❌ خطا در Gemini: {str(e)}.")
-    
-    # Groq
+
+    # 2. Groq
     if api_availability['groq']:
         logger.info("تلاش با Groq")
         try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": "mistral-saba-24b",
-                "messages": [
-                    {"role": "system", "content": "Write in Persian."},
-                    {"role": "user", "content": "یک تحلیل جذاب و حرفه‌ای به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 4 جمله کامل (هر جمله با نقطه پایان یابد) و حداقل 50 کلمه. لحن سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
-                ],
-                "max_tokens": 250,
-                "temperature": 0.7
-            }
-            response = await post_api_request(url, data, headers, retries=3)
-            text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
-            if is_valid_comment(text):
-                comment = text
-                previous_comments.append(comment)
-                if len(previous_comments) > 10:
-                    previous_comments.pop(0)
-                api_availability['groq'] = True
-                api_downtime['groq'] = None
-                fallback_count = 0
-                return comment
-            else:
-                logger.warning(f"تحلیل Groq رد شد: {text}")
+            async with asyncio.timeout(15):
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": "mistral-saba-24b",
+                    "messages": [
+                        {"role": "system", "content": "You are a professional film critic writing in Persian."},
+                        {"role": "user", "content": "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                    ],
+                    "max_tokens": 500,  # افزایش به 500 توکن
+                    "temperature": 0.7
+                }
+                response = await post_api_request(url, data, headers, retries=3)
+                if response and response.get('choices'):
+                    text = clean_text_for_validation(response['choices'][0]['message']['content'].strip())
+                    if is_valid_comment(text):
+                        previous_comments.append(text)
+                        if len(previous_comments) > 10:
+                            previous_comments.pop(0)
+                        logger.info("تحلیل Groq با موفقیت دریافت شد")
+                        return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                    logger.warning(f"تحلیل Groq نامعتبر: {text}")
+                else:
+                    logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال Groq: {str(e)}")
+            api_availability['groq'] = False
+            await send_admin_alert(None, f"❌ مشکل اتصال به Groq: {str(e)}.")
         except Exception as e:
             logger.error(f"خطا در Groq API: {str(e)}")
             api_availability['groq'] = False
-            if api_downtime['groq'] is None:
-                api_downtime['groq'] = datetime.now()
             await send_admin_alert(None, f"❌ خطا در Groq: {str(e)}.")
-    
-    # Open AI
+
+    # 3. Open AI
     if api_availability['openai']:
         logger.info("تلاش با Open AI")
         try:
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Write in Persian."},
-                    {"role": "user", "content": "یک تحلیل جذاب و حرفه‌ای به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 4 جمله کامل (هر جمله با نقطه پایان یابد) و حداقل 50 کلمه. لحن سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
-                ],
-                max_tokens=250,
-                temperature=0.7
-            )
-            text = response.choices[0].message.content.strip()
-            if is_valid_comment(text):
-                comment = text
-                previous_comments.append(comment)
-                if len(previous_comments) > 10:
-                    previous_comments.pop(0)
-                api_availability['openai'] = True
-                api_downtime['openai'] = None
-                fallback_count = 0
-                return comment
-            else:
-                logger.warning(f"تحلیل Open AI رد شد: {text}")
+            async with asyncio.timeout(15):
+                response = await client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a professional film critic writing in Persian."},
+                        {"role": "user", "content": "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                    ],
+                    max_tokens=500,  # افزایش به 500 توکن
+                    temperature=0.7
+                )
+                text = clean_text_for_validation(response.choices[0].message.content.strip())
+                if is_valid_comment(text):
+                    previous_comments.append(text)
+                    if len(previous_comments) > 10:
+                        previous_comments.pop(0)
+                    logger.info("تحلیل Open AI با موفقیت دریافت شد")
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                logger.warning(f"تحلیل Open AI نامعتبر: {text}")
         except Exception as e:
             logger.error(f"خطا در Open AI API: {str(e)}")
             api_availability['openai'] = False
-            if api_downtime['openai'] is None:
-                api_downtime['openai'] = datetime.now()
-            await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}.")
-    
-    # فال‌بک
-    if not comment:
-        logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
-        comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
-        fallback_count += 1
-        if fallback_count >= 5:
-            await send_admin_alert(None, "⚠️ هشدار: ۵ پست متوالی با فال‌بک ارسال شد. هوش مصنوعی‌ها در دسترس نیستند.")
-            logger.warning("۵ پست متوالی با فال‌بک ارسال شد")
-            fallback_count = 0
-    
+            # هشدار حذف شده است
+
+    # 4. فال‌بک
+    logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
+    comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
     previous_comments.append(comment)
     if len(previous_comments) > 10:
         previous_comments.pop(0)
     return comment
 
-async def check_api_downtime(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("چک کردن زمان قطعی APIها...")
-    for api, downtime in api_downtime.items():
-        if downtime and (datetime.now() - downtime).total_seconds() >= 259200:  # 3 روز
-            await send_admin_alert(context, f"⚠️ هشدار: API {api} برای بیش از 3 روز در دسترس نیست. لطفاً بررسی کنید.")
-            logger.warning(f"API {api} برای بیش از 3 روز قطع است")
+async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str, reply_markup=None):
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": ADMIN_ID, "text": message}
+            if reply_markup:
+                payload["reply_markup"] = json.dumps(reply_markup.to_dict())
+            async with session.post(url, json=payload) as response:
+                result = await response.json()
+                if not result.get('ok'):
+                    logger.error(f"خطا در ارسال هشدار به ادمین: {result}")
+    except Exception as e:
+        logger.error(f"خطا در ارسال هشدار به ادمین: {str(e)}")
 
-async def format_movie_post(movie):
-    comment = await generate_comment(movie['genres'])
-    genres = '، '.join(movie['genres'])
-    trailer = f"\n📽️ <a href='{movie['trailer']}'>تریلر</a>" if movie['trailer'] else ""
-    return (
-        f"🎬 <b>{movie['title']}</b> ({movie['year']})\n"
-        f"📌 ژانر: {genres}\n"
-        f"⭐️ امتیاز IMDb: {movie['imdb']}\n\n"
-        f"📖 خلاصه داستان:\n{movie['plot']}\n\n"
-        f"💬 حرف ما:\n{comment}\n"
-        f"{trailer}"
-    )
+async def fetch_movies_to_cache():
+    global cached_movies, last_fetch_time
+    logger.info("شروع آپدیت کش فیلم‌ها...")
+    new_movies = []
+    for attempt in range(5):
+        try:
+            async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+                page = 1
+                while len(new_movies) < 100 and page <= 20:
+                    # 1. TMDB
+                    logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
+                    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
+                    tmdb_data = await cache_api_request(tmdb_url)
+                    if tmdb_data and tmdb_data.get('results'):
+                        for m in tmdb_data['results']:
+                            details_url = f"https://api.themoviedb.org/3/movie/{m.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
+                            details_data = await cache_api_request(details_url)
+                            genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
+                            if (m.get('title') and m.get('id') and
+                                m.get('original_language') != 'hi' and
+                                'IN' not in m.get('origin_country', []) and
+                                m.get('poster_path') and
+                                'مستند' not in genres):
+                                imdb_score = await get_imdb_score_tmdb(m['title'])
+                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                                    new_movies.append({'title': m['title'], 'id': str(m['id'])})
+                        page += 1
+
+                    # 2. OMDb
+                    logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
+                    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&s=movie&type=movie&page={page}"
+                    omdb_data = await cache_api_request(omdb_url)
+                    if omdb_data and omdb_data.get('Search'):
+                        for m in omdb_data['Search']:
+                            genres = m.get('Genre', '').split(', ')
+                            genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+                            if 'مستند' not in genres:
+                                imdb_score = await get_imdb_score_omdb(m['Title'])
+                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                                    new_movies.append({'title': m['Title'], 'id': m['imdbID']})
+                        page += 1
+                
+                if new_movies:
+                    cached_movies = new_movies[:100]
+                    last_fetch_time = datetime.now()
+                    await save_cache_to_file()
+                    logger.info(f"لیست فیلم‌ها آپدیت شد. تعداد: {len(cached_movies)}")
+                    return True
+                logger.error("داده‌ای از هیچ API دریافت نشد")
+        except Exception as e:
+            logger.error(f"خطا در آپدیت کش (تلاش {attempt + 1}): {str(e)}")
+            await asyncio.sleep(2 ** attempt)
+    
+    logger.error("تلاش‌ها برای آپدیت کش ناموفق بود، لود از فایل")
+    if await load_cache_from_file():
+        return True
+    cached_movies = []
+    await save_cache_to_file()
+    last_fetch_time = datetime.now()
+    await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد، هیچ فیلمی در دسترس نیست")
+    return False
+
+async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("شروع آپدیت خودکار کش...")
+    if await fetch_movies_to_cache():
+        logger.info("آپدیت خودکار کش موفق بود")
+    else:
+        logger.error("خطا در آپدیت خودکار کش")
+        await send_admin_alert(context, "❌ خطا در آپدیت خودکار کش")
+
+async def get_random_movie(max_retries=5):
+    logger.info("انتخاب فیلم تصادفی...")
+    for attempt in range(max_retries):
+        try:
+            if not cached_movies or (datetime.now() - last_fetch_time).seconds > FETCH_INTERVAL:
+                logger.info("کش خالی یا قدیمی، آپدیت کش...")
+                await fetch_movies_to_cache()
+            
+            if not cached_movies:
+                logger.error("هیچ فیلمی در کش موجود نیست")
+                return None
+            
+            available_movies = [m for m in cached_movies if m['id'] not in posted_movies]
+            if not available_movies:
+                logger.warning("هیچ فیلم جدیدی در کش نیست")
+                return None
+            
+            movie = random.choice(available_movies)
+            logger.info(f"فیلم انتخاب شد: {movie['title']} (تلاش {attempt + 1})")
+            movie_info = await get_movie_info(movie['title'])
+            if not movie_info or movie_info['imdb'] == '0.0/10':
+                logger.warning(f"اطلاعات فیلم {movie['title']} نامعتبر، تلاش مجدد...")
+                continue
+            
+            # چک اضافی برای انیمیشن
+            if 'انیمیشن' in movie_info['genres'] and float(movie_info['imdb'].split('/')[0]) < 8.0:
+                logger.warning(f"فیلم {movie['title']} انیمیشن است اما امتیاز {movie_info['imdb']} دارد، رد شد")
+                continue
+            
+            posted_movies.append(movie['id'])
+            await save_posted_movies_to_file()
+            logger.info(f"فیلم‌های ارسال‌شده: {posted_movies}")
+            comment = await generate_comment(movie_info['genres'])
+            if not comment:
+                logger.error("تحلیل تولید نشد، استفاده از فال‌بک")
+                comment = get_fallback_by_genre(FALLBACK_COMMENTS, movie_info['genres'])
+            
+            imdb_score = float(movie_info['imdb'].split('/')[0])
+            logger.info(f"امتیاز برای {movie['title']}: {imdb_score}")
+            if imdb_score >= 8.5:
+                rating = 5
+            elif 7.5 <= imdb_score < 8.5:
+                rating = 4
+            elif 6.5 <= imdb_score < 7.5:
+                rating = 3
+            elif 6.0 <= imdb_score < 6.5:
+                rating = 2
+            else:
+                rating = 1
+            
+            if movie_info['poster']:
+                if not await check_poster(movie_info['poster']):
+                    movie_info['poster'] = None
+            
+            return {
+                **movie_info,
+                'comment': comment,
+                'rating': rating,
+                'special': imdb_score >= 8.5
+            }
+        except Exception as e:
+            logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
+            if attempt == max_retries - 1:
+                logger.error("تلاش‌ها تمام شد")
+                return None
+    logger.error("تلاش‌ها تمام شد")
+    return None
+
+def format_movie_post(movie):
+    stars = '⭐️' * movie['rating']
+    special = ' 👑' if movie['special'] else ''
+    channel_link = 'https://t.me/bestwatch_channel'
+    rlm = '\u200F'
+    genres = ' '.join([f"#{g.replace(' ', '_')}" for g in movie['genres']]) if movie['genres'] else '#سینمایی'
+    
+    post_sections = [
+        f"""
+🎬 <b>عنوان فیلم:</b>
+<b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>
+
+📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b>
+"""
+    ]
+    
+    if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
+        post_sections.append(f"""
+📝 <b>خلاصه داستان:</b>
+{rlm}{clean_text(movie['plot'])}
+""")
+    
+    post_sections.append(f"""
+🌟 <b>امتیاز IMDB:</b>
+<b>{clean_text(movie['imdb']) or 'نامشخص'}</b>
+""")
+    
+    if movie['trailer'] and movie['trailer'].startswith('http'):
+        post_sections.append(f"""
+🎞 <b>لینک تریلر:</b>
+{clean_text(movie['trailer'])}
+""")
+    
+    if movie['comment']:
+        post_sections.append(f"""
+🍿 <b>حرف ما:</b>
+{rlm}{clean_text(movie['comment'])}
+""")
+    
+    post_sections.append(f"""
+🎯 <b>ارزش دیدن: {stars}</b>
+
+{genres}
+
+{channel_link}
+""")
+    
+    return ''.join(post_sections)
+
+def get_main_menu():
+    toggle_text = "غیرفعال کردن ربات" if bot_enabled else "فعال کردن ربات"
+    keyboard = [
+        [
+            InlineKeyboardButton("آپدیت لیست", callback_data='fetch_movies'),
+            InlineKeyboardButton("ارسال فوری", callback_data='post_now')
+        ],
+        [
+            InlineKeyboardButton("تست‌ها", callback_data='tests_menu'),
+            InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')
+        ],
+        [
+            InlineKeyboardButton(toggle_text, callback_data='toggle_bot')
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_tests_menu():
+    keyboard = [
+        [
+            InlineKeyboardButton("دسترسی فنی", callback_data='test_all'),
+            InlineKeyboardButton("دسترسی کانال", callback_data='test_channel')
+        ],
+        [
+            InlineKeyboardButton("بازگشت", callback_data='back_to_main')
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != ADMIN_ID:
+        logger.info(f"دسترسی غیرمجاز توسط کاربر: {update.message.from_user.id}")
+        return
+    logger.info("دستور /start اجرا شد")
+    await update.message.reply_text("🤖 منوی ادمین", reply_markup=get_main_menu())
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.message.from_user.id) != ADMIN_ID:
+        logger.info(f"دسترسی غیرمجاز برای debug: {update.message.from_user.id}")
+        return
+    logger.info("اجرای debug")
+    try:
+        update_dict = update.to_dict()
+        callback_query = update.callback_query
+        callback_data = callback_query.data if callback_query else "هیچ callback_query"
+        await update.message.reply_text(
+            f"ساختار آپدیت:\n{update_dict}\n\nCallbackQuery: {callback_query}\nCallbackData: {callback_data}"
+        )
+    except Exception as e:
+        logger.error(f"خطا در دیباگ: {str(e)}")
+        await update.message.reply_text(f"❌ خطا در دیباگ: {str(e)}")
+
+async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه back_to_main")
+    await query.answer()
+    try:
+        await query.message.edit_text("🤖 منوی ادمین", reply_markup=get_main_menu())
+    except Exception as e:
+        logger.error(f"خطا در back_to_main: {str(e)}")
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+
+async def tests_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه tests_menu")
+    await query.answer()
+    try:
+        await query.message.edit_text("🛠 منوی تست‌ها", reply_markup=get_tests_menu())
+    except Exception as e:
+        logger.error(f"خطا در tests_menu: {str(e)}")
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+
+async def fetch_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه fetch_movies")
+    await query.answer()
+    msg = await query.message.edit_text("در حال آپدیت لیست...")
+    try:
+        if await fetch_movies_to_cache():
+            keyboard = [
+                [
+                    InlineKeyboardButton("لیست فیلم‌ها", callback_data='show_movies'),
+                    InlineKeyboardButton("بازگشت", callback_data='back_to_main')
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await msg.edit_text(f"✅ لیست آپدیت شد! ({len(cached_movies)} فیلم)", reply_markup=reply_markup)
+        else:
+            await msg.edit_text("❌ خطا در آپدیت لیست", reply_markup=get_main_menu())
+    except Exception as e:
+        logger.error(f"خطا در fetch_movies: {str(e)}")
+        await msg.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+
+async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه post_now")
+    await query.answer()
+    msg = await query.message.edit_text("در حال آماده‌سازی پست (انتخاب فیلم)...")
+    try:
+        if not bot_enabled:
+            logger.error("ارسال پست کنسل شد: ربات غیرفعال است")
+            await msg.edit_text("❌ ارسال پست کنسل شد: ربات غیرفعال است", reply_markup=get_main_menu())
+            return
+        
+        async with asyncio.timeout(120):
+            movie = await get_random_movie()
+            if not movie:
+                logger.error("هیچ فیلمی انتخاب نشد")
+                await msg.edit_text("❌ خطا: هیچ فیلمی برای ارسال در دسترس نیست", reply_markup=get_main_menu())
+                return
+            
+            await msg.edit_text(f"در حال آماده‌سازی پست برای {movie['title']} (تولید تحلیل)...")
+            logger.info(f"ارسال پست برای: {movie['title']}")
+            if movie['poster']:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=movie['poster'],
+                    caption=format_movie_post(movie),
+                    parse_mode='HTML',
+                    disable_notification=True
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=format_movie_post(movie),
+                    parse_mode='HTML',
+                    disable_notification=True
+                )
+            await msg.edit_text(f"✅ پست {movie['title']} ارسال شد", reply_markup=get_main_menu())
+    except asyncio.TimeoutError:
+        logger.error("ارسال پست فوری به دلیل تایم‌اوت کنسل شد")
+        await msg.edit_text("❌ ارسال پست به دلیل طولانی شدن (بیش از 2 دقیقه) کنسل شد", reply_markup=get_main_menu())
+    except Exception as e:
+        logger.error(f"خطا در post_now: {e}")
+        await msg.edit_text(f"❌ خطا در ارسال پست: {str(e)}", reply_markup=get_main_menu())
+
+async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    results = []
+
+    # تست TMDB
+    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
+    tmdb_data = await make_api_request(tmdb_url)
+    tmdb_status = "✅ TMDB اوکی" if tmdb_data and tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data or 'پاسخ نامعتبر'}"
+    results.append(tmdb_status)
+
+    # تست OMDb
+    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t=Inception&type=movie"
+    omdb_data = await make_api_request(omdb_url)
+    omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error') if omdb_data else 'پاسخ نامعتبر'}"
+    results.append(omdb_status)
+
+    # تست JobQueue
+    job_queue = context.job_queue
+    results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
+
+    # تست Gemini
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = "تست: یک جمله به فارسی بنویس."
+        response = await model.generate_content_async(prompt)
+        text = response.text.strip()
+        gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
+        results.append(gemini_status)
+    except Exception as e:
+        logger.error(f"خطا در تست Gemini: {str(e)}")
+        api_availability['gemini'] = False
+        results.append(f"❌ Gemini خطا: {str(e)}")
+
+    # تست Groq
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "mistral-saba-24b",
+            "messages": [
+                {"role": "system", "content": "Write in Persian."},
+                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+            ],
+            "max_tokens": 50,
+            "temperature": 0.7
+        }
+        response = await post_api_request(url, data, headers, retries=3)
+        text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
+        groq_status = "✅ Groq اوکی" if text and is_farsi(text) else f"❌ Groq خطا: پاسخ نامعتبر - متن دریافتی: {text}"
+        results.append(groq_status)
+    except Exception as e:
+        logger.error(f"خطا در تست Groq: {str(e)}")
+        api_availability['groq'] = False
+        results.append(f"❌ Groq خطا: {str(e)}")
+
+    # تست Open AI
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Write in Persian."},
+                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+            ],
+            max_tokens=50,
+            temperature=0.7
+        )
+        text = response.choices[0].message.content.strip()
+        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+        results.append(openai_status)
+    except Exception as e:
+        logger.error(f"خطا در تست Open AI: {str(e)}")
+        api_availability['openai'] = False
+        results.append(f"❌ Open AI خطا: {str(e)}")
+
+    return "\n".join(results)
+
+async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه test_all")
+    await query.answer()
+    msg = await query.message.edit_text("در حال اجرای تست‌ها...")
+    try:
+        results = await run_tests(update, context)
+        await msg.edit_text(f"📋 نتایج تست:\n{results}", reply_markup=get_tests_menu())
+    except Exception as e:
+        logger.error(f"خطا در test_all: {str(e)}")
+        await msg.edit_text(f"❌ خطا در اجرای تست‌ها: {str(e)}", reply_markup=get_tests_menu())
+
+async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه test_channel")
+    await query.answer()
+    msg = await query.message.edit_text("در حال تست دسترسی به کانال...")
+    try:
+        if not CHANNEL_ID:
+            raise Exception("CHANNEL_ID تنظیم نشده است.")
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getChatMember?chat_id={CHANNEL_ID}&user_id={context.bot.id}"
+            async with session.get(url) as response:
+                data = await response.json()
+                if not data.get('ok'):
+                    raise Exception(f"خطا در API تلگرام: {data.get('description')}")
+                if data['result']['status'] not in ['administrator', 'creator']:
+                    raise Exception("بات ادمین کانال نیست یا CHANNEL_ID اشتباه است.")
+        await msg.edit_text("✅ دسترسی به کانال اوکی", reply_markup=get_tests_menu())
+    except Exception as e:
+        logger.error(f"خطا در تست دسترسی به کانال: {str(e)}")
+        await msg.edit_text(f"❌ خطا در تست دسترسی به کانال: {str(e)}", reply_markup=get_tests_menu())
+
+async def show_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه show_movies")
+    await query.answer()
+    try:
+        if not cached_movies:
+            await query.message.edit_text("❌ لیست فیلم‌ها خالی است", reply_markup=get_main_menu())
+            return
+        
+        movies_list = "\n".join([f"{i+1}. {m['title']}" for i, m in enumerate(cached_movies)])
+        keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(f"📋 لیست فیلم‌ها:\n{movies_list}", reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"خطا در show_movies: {str(e)}")
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+
+async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global bot_enabled
+    query = update.callback_query
+    logger.info("دکمه toggle_bot")
+    await query.answer()
+    try:
+        bot_enabled = not bot_enabled
+        status = "فعال" if bot_enabled else "غیرفعال"
+        await query.message.edit_text(f"✅ ربات {status} شد", reply_markup=get_main_menu())
+        await send_admin_alert(context, f"🤖 ربات {status} شد")
+    except Exception as e:
+        logger.error(f"خطا در toggle_bot: {str(e)}")
+        await query.message.edit_text(f"❌ خطا: {str(e)}", reply_markup=get_main_menu())
+
+async def reset_webhook_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    logger.info("دکمه reset_webhook")
+    await query.answer()
+    msg = await query.message.edit_text("در حال ریست Webhook...")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True}
+            ) as response:
+                result = await response.json()
+                if result.get('ok'):
+                    await msg.edit_text("✅ Webhook ریست شد", reply_markup=get_main_menu())
+                else:
+                    await msg.edit_text(f"❌ خطا در ریست Webhook: {result.get('description')}", reply_markup=get_main_menu())
+    except Exception as e:
+        logger.error(f"خطا در ریست Webhook: {e}")
+        await msg.edit_text(f"❌ خطا در ریست Webhook: {str(e)}", reply_markup=get_main_menu())
 
 async def auto_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info("شروع پست خودکار...")
@@ -749,23 +1137,23 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
             return
         movie = await get_random_movie()
         if not movie:
-            logger.error("هیچ فیلمی برای پست کردن یافت نشد، پست لغو شد")
+            logger.error("هیچ فیلمی انتخاب نشد")
+            await send_admin_alert(context, "❌ خطا: هیچ فیلمی برای پست خودکار در دسترس نیست")
             return
         
         logger.info(f"فیلم انتخاب شد: {movie['title']}")
-        caption = await format_movie_post(movie)  # دریافت کپشن
         if movie['poster']:
             await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=movie['poster'],
-                caption=caption,
+                caption=format_movie_post(movie),
                 parse_mode='HTML',
                 disable_notification=True
             )
         else:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
-                text=caption,
+                text=format_movie_post(movie),
                 parse_mode='HTML',
                 disable_notification=True
             )
@@ -774,254 +1162,11 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در ارسال پست خودکار: {e}")
         await send_admin_alert(context, f"❌ خطای پست خودکار: {str(e)}")
 
-async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("شروع آپدیت خودکار کش...")
-    await fetch_movies_to_cache()
-
-async def send_admin_alert(context, message):
-    if context:
-        try:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=message)
-        except Exception as e:
-            logger.error(f"خطا در ارسال هشدار به ادمین: {e}")
-    else:
-        try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={'chat_id': ADMIN_ID, 'text': message}
-                )
-        except Exception as e:
-            logger.error(f"خطا در ارسال هشدار به ادمین (بدون context): {e}")
-
-async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    results = []
-    
-    # تست TMDB
-    tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
-    tmdb_data = await make_api_request(tmdb_url)
-    tmdb_status = "✅ TMDB اوکی" if tmdb_data and tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
-    results.append(tmdb_status)
-    
-    # تست OMDb
-    omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t=Inception&type=movie"
-    omdb_data = await make_api_request(omdb_url)
-    omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error', 'نامشخص')}"
-    results.append(omdb_status)
-    
-    # تست JobQueue
-    job_queue = context.job_queue
-    job_queue_status = "✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال"
-    results.append(job_queue_status)
-    
-    # تست Gemini
-    gemini_status = "❌ Gemini غیرفعال"  # پیش‌فرض
-    if api_availability['gemini']:
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = "تست: یک جمله به فارسی بنویس."
-            response = await model.generate_content_async(prompt)
-            text = response.text.strip()
-            gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
-        except Exception as e:
-            logger.error(f"خطا در تست Gemini: {str(e)}")
-            api_availability['gemini'] = False
-            gemini_status = f"❌ Gemini خطا: {str(e)}"
-    results.append(gemini_status)
-    
-    # تست Groq
-    groq_status = "❌ Groq غیرفعال"  # پیش‌فرض
-    if api_availability['groq']:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": "mistral-saba-24b",
-                "messages": [
-                    {"role": "system", "content": "Write in Persian."},
-                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-                ],
-                "max_tokens": 50,
-                "temperature": 0.7
-            }
-            response = await post_api_request(url, data, headers, retries=3)
-            text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
-            groq_status = "✅ Groq اوکی" if text and is_farsi(text) else f"❌ Groq خطا: پاسخ نامعتبر - متن دریافتی: {text}"
-        except Exception as e:
-            logger.error(f"خطا در تست Groq: {str(e)}")
-            api_availability['groq'] = False
-            groq_status = f"❌ Groq خطا: {str(e)}"
-    results.append(groq_status)
-    
-    # تست Open AI
-    openai_status = "❌ Open AI غیرفعال"  # پیش‌فرض
-    if api_availability['openai']:
-        try:
-            response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Write in Persian."},
-                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-                ],
-                max_tokens=50,
-                temperature=0.7
-            )
-            text = response.choices[0].message.content.strip()
-            openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-        except Exception as e:
-            logger.error(f"خطا در تست Open AI: {str(e)}")
-            api_availability['openai'] = False
-            openai_status = f"❌ Open AI خطا: {str(e)}"
-    results.append(openai_status)
-    
-    logger.info(f"نتایج تست فنی: {results}")
-    return "\n".join(results)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) != ADMIN_ID:
-        await update.message.reply_text("دسترسی غیرمجاز! فقط ادمین می‌تواند از این بات استفاده کند.")
-        return
-    
-    keyboard = [
-        [InlineKeyboardButton("تست‌ها", callback_data='tests_menu')],
-        [InlineKeyboardButton("دریافت فیلم‌ها", callback_data='fetch_movies')],
-        [InlineKeyboardButton("ارسال فوری", callback_data='post_now')],
-        [InlineKeyboardButton("نمایش فیلم‌ها", callback_data='show_movies')],
-        [InlineKeyboardButton("فعال/غیرفعال کردن ربات", callback_data='toggle_bot')],
-        [InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("منوی ادمین:", reply_markup=reply_markup)
-
-async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("تست‌ها", callback_data='tests_menu')],
-        [InlineKeyboardButton("دریافت فیلم‌ها", callback_data='fetch_movies')],
-        [InlineKeyboardButton("ارسال فوری", callback_data='post_now')],
-        [InlineKeyboardButton("نمایش فیلم‌ها", callback_data='show_movies')],
-        [InlineKeyboardButton("فعال/غیرفعال کردن ربات", callback_data='toggle_bot')],
-        [InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("منوی ادمین:", reply_markup=reply_markup)
-
-async def tests_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("دسترسی فنی", callback_data='test_all')],
-        [InlineKeyboardButton("ارسال به کانال", callback_data='test_channel')],
-        [InlineKeyboardButton("بازگشت", callback_data='back_to_main')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("منوی تست‌ها:", reply_markup=reply_markup)
-
-async def test_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    results = await run_tests(update, context)
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='tests_menu')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(f"نتایج تست فنی:\n{results}", reply_markup=reply_markup)
-
-async def test_channel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text="تست ارسال به کانال موفق بود!")
-        result = "✅ ارسال به کانال اوکی"
-    except Exception as e:
-        result = f"❌ خطا در ارسال به کانال: {str(e)}"
-        await send_admin_alert(context, f"❌ خطا در تست کانال: {str(e)}")
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='tests_menu')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(result, reply_markup=reply_markup)
-
-async def fetch_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await fetch_movies_to_cache()
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(f"کش فیلم‌ها آپدیت شد: {len(cached_movies)} فیلم", reply_markup=reply_markup)
-
-async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await auto_post(context)
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("پست فوری ارسال شد", reply_markup=reply_markup)
-
-async def show_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await load_cache_from_file()
-    if not cached_movies:
-        text = "هیچ فیلمی در کش موجود نیست."
-    else:
-        text = "\n".join([f"{m['title']} ({m['year']})" for m in cached_movies[:10]])
-        if len(cached_movies) > 10:
-            text += "\n... و بیشتر"
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(f"فیلم‌های کش:\n{text}", reply_markup=reply_markup)
-
-async def toggle_bot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global bot_enabled
-    query = update.callback_query
-    await query.answer()
-    bot_enabled = not bot_enabled
-    status = "فعال" if bot_enabled else "غیرفعال"
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(f"ربات {status} شد", reply_markup=reply_markup)
-
-async def reset_webhook_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        async with aiohttp.ClientSession() as session:
-            await session.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
-                json={"drop_pending_updates": True}
-            )
-        result = "✅ Webhook ریست شد"
-    except Exception as e:
-        result = f"❌ خطا در ریست Webhook: {str(e)}"
-        await send_admin_alert(context, f"❌ خطا در ریست Webhook: {str(e)}")
-    keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(result, reply_markup=reply_markup)
-
-async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) != ADMIN_ID:
-        await update.message.reply_text("دسترسی غیرمجاز!")
-        return
-    debug_info = (
-        f"وضعیت ربات: {'فعال' if bot_enabled else 'غیرفعال'}\n"
-        f"تعداد فیلم‌ها در کش: {len(cached_movies)}\n"
-        f"فیلم‌های ارسال‌شده: {len(posted_movies)}\n"
-        f"آخرین آپدیت کش: {last_fetch_time}\n"
-        f"وضعیت APIها:\n"
-        f" - Gemini: {'فعال' if api_availability['gemini'] else 'غیرفعال'}\n"
-        f" - Groq: {'فعال' if api_availability['groq'] else 'غیرفعال'}\n"
-        f" - Open AI: {'فعال' if api_availability['openai'] else 'غیرفعال'}\n"
-        f"خطاهای API:\n"
-        f" - TMDB: {api_errors['tmdb']}\n"
-        f" - OMDb: {api_errors['omdb']}"
-    )
-    await update.message.reply_text(debug_info)
-
 async def health_check(request):
     return web.Response(text="OK")
 
 async def run_web():
+    logger.info(f"راه‌اندازی سرور وب روی پورت {PORT}...")
     app = web.Application()
     app.router.add_get('/health', health_check)
     runner = web.AppRunner(app)
@@ -1032,7 +1177,6 @@ async def run_web():
     return runner
 
 async def run_bot():
-    global bot_app
     logger.info("شروع راه‌اندازی بات تلگرام...")
     try:
         app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -1042,7 +1186,6 @@ async def run_bot():
         await send_admin_alert(None, f"❌ خطا در ساخت بات: {str(e)}")
         raise
     
-    # اضافه کردن handlerها
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler("resetwebhook", reset_webhook_handler))
@@ -1062,7 +1205,6 @@ async def run_bot():
         logger.info("JobQueue فعال شد")
         job_queue.run_repeating(auto_post, interval=POST_INTERVAL, first=10)
         job_queue.run_repeating(auto_fetch_movies, interval=FETCH_INTERVAL, first=60)
-        job_queue.run_repeating(check_api_downtime, interval=86400, first=3600)
     else:
         logger.error("JobQueue فعال نشد، ربات متوقف می‌شود")
         await send_admin_alert(None, "❌ خطا: JobQueue فعال نشد. لطفاً ربات را بررسی کنید.")
@@ -1070,48 +1212,44 @@ async def run_bot():
         bot_enabled = False
         raise Exception("JobQueue غیرفعال است")
     
-    bot_app = app
     await app.initialize()
     await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
     logger.info("بات تلگرام با موفقیت راه‌اندازی شد")
     return app
 
 async def main():
     logger.info("شروع برنامه...")
     await init_openai_client()
+    await load_cache_from_file()
+    await load_posted_movies_from_file()
+    if not await fetch_movies_to_cache():
+        logger.error("خطا در دریافت اولیه لیست فیلم‌ها")
     
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(
+            async with session.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook",
                 json={"drop_pending_updates": True}
-            )
-        logger.info("Webhook ریست شد")
+            ) as response:
+                result = await response.json()
+                logger.info(f"ریست Webhook: {result}")
     except Exception as e:
-        logger.error(f"خطا در ریست Webhook: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در ریست Webhook: {str(e)}")
+        logger.error(f"خطا در ریست Webhook اولیه: {e}")
+        await send_admin_alert(None, f"❌ خطا در ریست Webhook اولیه: {str(e)}")
     
-    await load_cache_from_file()
-    await load_posted_movies_from_file()
-    
+    bot_app = await run_bot()
     web_runner = await run_web()
     
     try:
-        bot_app = await run_bot()
-        await bot_app.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            close_loop=False,
-            stop_signals=[],
-            drop_pending_updates=True
-        )
-    except Exception as e:
-        logger.error(f"خطا در اجرای بات: {str(e)}")
-        await send_admin_alert(None, f"❌ خطا در اجرای بات: {str(e)}")
+        while True:
+            await asyncio.sleep(3600)
+    except KeyboardInterrupt:
+        logger.info("خاموش کردن بات...")
     finally:
-        if bot_app and bot_app.running:
-            await bot_app.updater.stop()
-            await bot_app.stop()
-            await bot_app.shutdown()
+        await bot_app.updater.stop()
+        await bot_app.stop()
+        await bot_app.shutdown()
         await web_runner.cleanup()
         if client:
             await client.close()
