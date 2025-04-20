@@ -142,6 +142,9 @@ def is_valid_comment(text):
     if text in previous_comments:
         logger.warning(f"تحلیل رد شد: متن تکراری - {text}")
         return False
+    if '[نام بازیگر]' in text or re.search(r'\[\w+\]', text):
+        logger.warning(f"تحلیل رد شد: شامل عبارات مبهم مثل [نام بازیگر] - {text}")
+        return False
     return True
 
 def shorten_comment(text):
@@ -181,7 +184,7 @@ async def translate_plot(plot, title):
                         {"role": "system", "content": "Translate the movie plot from English to Persian accurately and concisely. Use only Persian."},
                         {"role": "user", "content": f"Translate: {plot}"}
                     ],
-                    "max_tokens": 200,
+                    "max_tokens": 150,
                     "temperature": 0.5
                 }
                 response = await post_api_request(url, data, headers, retries=3)
@@ -335,7 +338,7 @@ async def get_imdb_score_omdb(title, genres=None):
     else:
         genres = data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-        is_animation = 'انیمیشن' in genres
+        is_animation = 'انیمیشن' در genres
     
     min_score = 8.0 if is_animation else 6.0
     if float(imdb_score) < min_score:
@@ -539,6 +542,7 @@ async def get_movie_info(title):
 
 async def generate_comment(genres):
     logger.info("تولید تحلیل...")
+    logger.info(f"وضعیت APIها: Gemini={api_availability['gemini']}, Groq={api_availability['groq']}, OpenAI={api_availability['openai']}")
 
     # 1. Gemini
     if api_availability['gemini']:
@@ -547,9 +551,7 @@ async def generate_comment(genres):
             async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 prompt = """
-تحلیل سینمایی به فارسی بنویس، بدون نام فیلم، در 5 تا 8 جمله کوتاه. 
-درباره کارگردانی، بازیگری، موسیقی، و نقاط قوت و ضعف فیلم صحبت کن. 
-متن حرفه‌ای، متنوع و 50 تا 120 کلمه باشد. فقط فارسی بنویس.
+یه پاراگراف کوتاه و جذاب به فارسی بنویس، انگار خودت فیلم رو دیدی و داری توصیه می‌کنی. بدون ذکر نام فیلم یا بازیگر، درباره حس و حال فیلم، داستان، و نقاط قوتش حرف بزن. از عبارات مبهم مثل [نام بازیگر] خودداری کن. متن 50 تا 80 کلمه، با 4 تا 6 جمله کوتاه و کامل باشه. فقط فارسی بنویس و جمله آخر کامل باشه.
 """
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
@@ -589,14 +591,12 @@ async def generate_comment(genres):
                 data = {
                     "model": "mistral-saba-24b",
                     "messages": [
-                        {"role": "system", "content": "You are a film critic writing in Persian."},
+                        {"role": "system", "content": "You are a movie enthusiast writing in Persian with a personal and engaging tone."},
                         {"role": "user", "content": """
-تحلیل سینمایی به فارسی بنویس، بدون نام فیلم، در 5 تا 8 جمله کوتاه. 
-درباره کارگردانی، بازیگری، موسیقی، و نقاط قوت و ضعف فیلم صحبت کن. 
-متن حرفه‌ای، متنوع و 50 تا 120 کلمه باشد. فقط فارسی بنویس.
+یه پاراگراف کوتاه و جذاب به فارسی بنویس، انگار خودت فیلم رو دیدی و داری توصیه می‌کنی. بدون ذکر نام فیلم یا بازیگر، درباره حس و حال فیلم، داستان، و نقاط قوتش حرف بزن. از عبارات مبهم مثل [نام بازیگر] خودداری کن. متن 50 تا 80 کلمه، با 4 تا 6 جمله کوتاه و کامل باشه. فقط فارسی بنویس و جمله آخر کامل باشه.
 """}
                     ],
-                    "max_tokens": 200,
+                    "max_tokens": 150,
                     "temperature": 0.7
                 }
                 response = await post_api_request(url, data, headers, retries=3)
@@ -635,14 +635,12 @@ async def generate_comment(genres):
                 response = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": "You are a film critic writing in Persian."},
+                        {"role": "system", "content": "You are a movie enthusiast writing in Persian with a personal and engaging tone."},
                         {"role": "user", "content": """
-تحلیل سینمایی به فارسی بنویس، بدون نام فیلم، در 5 تا 8 جمله کوتاه. 
-درباره کارگردانی، بازیگری، موسیقی، و نقاط قوت و ضعف فیلم صحبت کن. 
-متن حرفه‌ای، متنوع و 50 تا 120 کلمه باشد. فقط فارسی بنویس.
+یه پاراگراف کوتاه و جذاب به فارسی بنویس، انگار خودت فیلم رو دیدی و داری توصیه می‌کنی. بدون ذکر نام فیلم یا بازیگر، درباره حس و حال فیلم، داستان، و نقاط قوتش حرف بزن. از عبارات مبهم مثل [نام بازیگر] خودداری کن. متن 50 تا 80 کلمه، با 4 تا 6 جمله کوتاه و کامل باشه. فقط فارسی بنویس و جمله آخر کامل باشه.
 """}
                     ],
-                    max_tokens=200,
+                    max_tokens=150,
                     temperature=0.7
                 )
                 text = clean_text_for_validation(response.choices[0].message.content.strip())
@@ -668,7 +666,7 @@ async def generate_comment(genres):
     # 4. فال‌بک موقت
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک موقت")
     fallback_comment = """
-کارگردانی فیلم فضایی گیرا خلق می‌کند. بازیگران احساسات را به‌خوبی منتقل می‌کنند. موسیقی متن لحظات دراماتیک را تقویت می‌کند. طراحی صحنه‌ها داستان را غنی‌تر می‌کند. ریتم فیلم گاهی کند است. روایت عمیق، نقطه قوت فیلم است.
+این فیلم یه سفر احساسی و پرهیجانه که داستانت رو تا آخر دنبال می‌کنه. داستانش ساده اما عمیقه و قلب آدم رو لمس می‌کنه. کارگردانی قوی و موسیقی فوق‌العاده، حس و حال خاصی به فیلم می‌دن. اگه دنبال یه فیلم تأثیرگذار هستی، حتماً ببین!
 """
     if is_valid_comment(fallback_comment):
         previous_comments.append(fallback_comment)
