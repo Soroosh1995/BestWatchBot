@@ -88,78 +88,6 @@ GENRE_TRANSLATIONS = {
     'Unknown': 'سایر'
 }
 
-# فال‌بک‌های گسترده‌تر
-FALLBACK_PLOTS = {
-    'اکشن': [
-        "جهانی پر از خطر و تعقیب و گریز، جایی که قهرمانی شجاع با دشمنانی قدرتمند روبرو می‌شود. نبردهای نفس‌گیر و تصمیم‌های دشوار او را به سوی هدفی بزرگ هدایت می‌کنند. آیا او می‌تواند در برابر همه موانع پیروز شود؟",
-        "داستانی پر از انفجارهای مهیج و مبارزه‌های تن‌به‌تن که قلب شما را به تپش می‌اندازد. یک ماموریت غیرممکن، قهرمانی تنها را به دل خطر می‌کشاند. آیا عدالت در نهایت برقرار خواهد شد؟",
-        "ماجراجویی‌ای حماسی که قهرمان در برابر سازمانی مرموز قرار می‌گیرد. صحنه‌های اکشن خیره‌کننده و داستانی پر از رمز و راز شما را تا پایان میخکوب می‌کند. آیا او می‌تواند حقیقت را آشکار کند؟",
-        "داستانی از انتقام و مبارزه که در شهری آشوب‌زده رخ می‌دهد. قهرمانی مصمم با گذشته‌ای تاریک برای نجات عزیزانش می‌جنگد. آیا پایان این نبرد به پیروزی ختم می‌شود؟",
-        "جهانی در آستانه نابودی، جایی که یک سرباز تنها باید ماموریتی غیرممکن را به سرانجام برساند. اکشن بی‌وقفه و داستانی پرتعلیق شما را در انتظار نگه می‌دارد. آیا بشریت نجات خواهد یافت؟",
-    ],
-    'درام': [
-        "روایتی عمیق از زندگی و روابط انسانی که با انتخاب‌های دشوار گره خورده است. شخصیتی پیچیده در مسیری پر از چالش‌ها به دنبال معنای واقعی زندگی می‌گردد. آیا او می‌تواند آرامش را پیدا کند؟",
-        "داستانی احساسی از عشق و از دست دادن که قلب شما را لمس می‌کند. تصمیم‌هایی که آینده‌ای نامعلوم را رقم می‌زنند، شخصیت‌ها را به سوی سرنوشتی نامعلوم می‌کشانند. آیا امید در پایان پیروز خواهد شد؟",
-        "سفری در دل مشکلات خانوادگی و گذشته‌ای پر از راز. شخصیت‌هایی که با شجاعت با حقیقت روبرو می‌شوند، شما را به فکر فرو می‌برند. آیا این سفر به رستگاری ختم می‌شود؟",
-        "روایتی تکان‌دهنده از مبارزه یک فرد با جامعه‌ای ناعادلانه. روابط انسانی و انتخاب‌های سخت، داستانی عمیق را شکل می‌دهند. آیا عدالت در نهایت برقرار خواهد شد؟",
-        "داستانی از تلاش برای بازسازی زندگی پس از یک فاجعه. شخصیت‌هایی که با شجاعت و امید به سوی آینده حرکت می‌کنند. آیا این مسیر به روشنایی خواهد رسید؟",
-    ],
-    'کمدی': [
-        "ماجراهای خنده‌داری که گروهی از دوستان را در موقعیت‌های عجیب و غریب قرار می‌دهد. شوخی‌های هوشمندانه و روابط دوستانه شما را سرگرم می‌کند. آیا این دوستان از این مخمصه‌ها جان سالم به در می‌برند؟",
-        "داستانی پر از سوءتفاهم‌های بامزه و موقعیت‌های خنده‌دار که زندگی را زیر و رو می‌کند. شخصیت‌هایی دوست‌داشتنی با تصمیم‌های عجیب شما را به خنده می‌اندازند. آیا همه‌چیز به خیر و خوشی تمام می‌شود؟",
-        "کمدی‌ای پر از طنز و ماجراهای غیرمنتظره که شما را غافلگیر می‌کند. داستانی سبک و سرگرم‌کننده که حال شما را خوب می‌کند. آیا این ماجراها به پایانی شاد می‌رسند؟",
-        "روایتی خنده‌دار از زندگی روزمره‌ای که به شکلی غیرمنتظره آشوبناک می‌شود. شخصیت‌هایی با طنزی خاص شما را تا پایان همراهی می‌کنند. آیا نظم به زندگی آنها بازمی‌گردد؟",
-        "داستانی از اشتباهات خنده‌دار و ماجراهای عجیب که قلب شما را گرم می‌کند. گروهی از افراد با روابط دوستانه و شوخی‌های بامزه شما را سرگرم می‌کنند. آیا این داستان به شادی ختم می‌شود؟",
-    ],
-    'علمی_تخیلی': [
-        "جهانی در آینده‌ای دور که تکنولوژی بشریت را به چالش کشیده است. ماجراجویی‌ای برای کشف رازهای کیهانی، قهرمانان را به سوی ناشناخته‌ها می‌کشاند. آیا حقیقت آشکار خواهد شد؟",
-        "داستانی از سفر در زمان که تاریخ را زیر و رو می‌کند. اکتشافات علمی و تصمیم‌های خطرناک، آینده‌ای نامعلوم را رقم می‌زنند. آیا بشریت از این تغییرات جان سالم به در خواهد برد؟",
-        "ماجراجویی‌ای در فضایی ناشناخته که با موجودات بیگانه و فناوری‌های عجیب گره خورده است. داستانی پر از رمز و راز که ذهن شما را درگیر می‌کند. آیا قهرمانان موفق به نجات خود می‌شوند؟",
-        "جهانی که هوش مصنوعی کنترل را به دست گرفته است. مبارزه‌ای برای بازپس‌گیری آینده، شما را در داستانی پرتعلیق غرق می‌کند. آیا انسانیت در این نبرد پیروز خواهد شد؟",
-        "روایتی از اکتشافات علمی که مرزهای واقعیت را جابجا می‌کند. ماجراجویی‌ای پر از خطر و شگفتی که شما را به فکر فرو می‌برد. آیا این اکتشافات به خیر بشریت تمام خواهد شد؟",
-    ],
-    'سایر': [
-        "داستانی متفاوت که شما را به سفری غیرمنتظره می‌برد. شخصیت‌هایی با گذشته‌های پیچیده و ماجراهایی که قلب و ذهن را درگیر می‌کنند. آیا این داستان به پایانی خوش ختم می‌شود؟",
-        "روایتی جذاب از زندگی و روابط انسانی که با شگفتی‌های غیرمنتظره همراه است. انتخاب‌های دشوار و لحظات احساسی شما را همراه می‌کند. آیا امید در پایان پیروز خواهد شد؟",
-        "ماجراجویی‌ای که شما را به دنیایی ناشناخته می‌کشاند. داستانی پر از رمز و راز که شما را تا پایان درگیر می‌کند. آیا حقیقت در این مسیر آشکار خواهد شد؟",
-        "داستانی از مبارزه با چالش‌های زندگی که شما را به فکر فرو می‌برد. شخصیت‌هایی با شجاعت و اراده، مسیری پر از امید را طی می‌کنند. آیا این مسیر به موفقیت ختم می‌شود؟",
-        "روایتی احساسی و جذاب که شما را در داستانی پر از شگفتی غرق می‌کند. ماجراهایی که قلب و ذهن را تسخیر می‌کنند. آیا پایان این داستان شاد خواهد بود؟",
-    ],
-    'معروف': [
-        "سفری حماسی در اعماق فضا برای نجات بشریت، پر از معماهای علمی و روابط عمیق خانوادگی. تصمیم‌های دشوار و اکتشافات شگفت‌انگیز، شما را تا پایان میخکوب می‌کند. آیا امید به پیروزی خواهد رسید؟",
-        "داستانی از اکتشافات فضایی و مبارزه برای بقا که قلب و ذهن را درگیر می‌کند. روابط انسانی و معماهای کیهانی، تجربه‌ای بی‌نظیر را رقم می‌زنند. آیا بشریت راه نجات را پیدا خواهد کرد؟",
-        "روایتی عمیق از سفر در فضا و زمان که با احساسات خانوادگی گره خورده است. جلوه‌های بصری خیره‌کننده و داستانی پیچیده شما را به فکر فرو می‌برد. آیا پایان این سفر روشن خواهد بود؟",
-    ]
-}
-
-FALLBACK_COMMENTS = {
-    'اکشن': [
-        "این فیلم با صحنه‌های اکشن نفس‌گیر و داستانی پرهیجان شما را سرگرم می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده، نقاط قوت آن هستند. برخی پیچش‌های داستانی قابل پیش‌بینی‌اند.",
-        "اکشنی پرشور با ریتمی تند و مبارزه‌های تماشایی. داستان جذاب و موسیقی حماسی، تجربه‌ای سینمایی را رقم می‌زنند. برخی دیالوگ‌ها می‌توانستند قوی‌تر باشند.",
-        "فیلمی پر از تعقیب و گریز و نبردهای مهیج. کارگردانی خلاقانه و طراحی صحنه‌ها آن را متمایز کرده است. ریتم تند ممکن است برخی را خسته کند.",
-    ],
-    'درام': [
-        "روایتی احساسی که شما را به سفری در روابط انسانی می‌برد. بازیگری بی‌نقص و موسیقی تأثیرگذار، آن را ماندگار کرده‌اند. ریتم کند برخی صحنه‌ها ممکن است آزاردهنده باشد.",
-        "داستانی تکان‌دهنده از چالش‌های زندگی با فیلم‌برداری زیبا. شخصیت‌پردازی قوی شما را درگیر می‌کند. پایان ممکن است برای همه رضایت‌بخش نباشد.",
-        "فیلمی با داستان‌سرایی احساسی و شخصیت‌های پیچیده. کارگردانی هنرمندانه آن را خاص کرده است. برخی لحظات ممکن است طولانی به نظر برسند.",
-    ],
-    'کمدی': [
-        "این فیلم با طنزی هوشمندانه شما را سرگرم می‌کند. بازیگران با شیمی فوق‌العاده، تجربه‌ای شاد را رقم می‌زنند. برخی شوخی‌ها ممکن است تکراری باشند.",
-        "کمدی‌ای پر از ماجراهای خنده‌دار و شخصیت‌های دوست‌داشتنی. کارگردانی پرانرژی آن را جذاب کرده است. ریتم برخی صحنه‌ها ممکن است افت کند.",
-        "داستانی سبک و بامزه با شوخی‌های خلاقانه. این فیلم برای لحظات شاد عالی است. برخی جوک‌ها ممکن است به مذاق همه خوش نیاید.",
-    ],
-    'علمی_تخیلی': [
-        "فیلمی با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده. کارگردانی هوشمندانه شما را به دنیایی دیگر می‌برد. برخی مفاهیم ممکن است پیچیده باشند.",
-        "جهانی فانتزی با داستان‌سرایی قوی و فناوری‌های تخیلی. طراحی صحنه‌ها از نقاط قوت آن است. برخی جزئیات ممکن است گنگ باشند.",
-        "داستانی علمی‌تخیلی که ذهن شما را به چالش می‌کشد. جلوه‌های ویژه آن را دیدنی کرده است. ریتم برخی صحنه‌ها ممکن است کند باشد.",
-    ],
-    'سایر': [
-        "داستانی جذاب که شما را به دنیایی متفاوت می‌برد. بازیگری خوب و روایت روان، تجربه‌ای سینمایی را رقم می‌زنند. برخی لحظات ممکن است کند باشند.",
-        "روایتی که با شگفتی‌های غیرمنتظره شما را مجذوب می‌کند. کارگردانی هنرمندانه آن را متمایز کرده است. ریتم برخی صحنه‌ها ممکن است یکنواخت باشد.",
-        "فیلمی با داستانی متفاوت و شخصیت‌های پیچیده. طراحی صحنه از نقاط قوت آن است. برخی لحظات ممکن است غیرمنتظره باشند.",
-    ]
-}
-
 # شمارشگر خطاهای API
 api_errors = {
     'tmdb': 0,
@@ -203,8 +131,8 @@ def is_valid_comment(text):
         logger.warning(f"تحلیل رد شد: متن غیرفارسی - {text}")
         return False
     words = text.split()
-    if len(words) < 20 or len(words) > 40:
-        logger.warning(f"تحلیل رد شد: تعداد کلمات {len(words)} (باید بین 20 تا 40 باشد) - {text}")
+    if len(words) < 60 or len(words) > 90:
+        logger.warning(f"تحلیل رد شد: تعداد کلمات {len(words)} (باید بین 60 تا 90 باشد) - {text}")
         return False
     sentences = text.split('. ')
     last_sentence = sentences[-1].strip() if sentences else ""
@@ -216,14 +144,66 @@ def is_valid_comment(text):
         return False
     return True
 
-def get_fallback_by_genre(options, genres):
-    for genre in genres:
-        if genre in options:
-            available = [opt for opt in options[genre] if opt not in previous_comments]
-            if available:
-                return random.choice(available)
-    available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
-    return random.choice(available) if available else options['سایر'][0]
+async def translate_plot(plot, title):
+    logger.info(f"تلاش برای ترجمه خلاصه داستان برای {title}")
+    
+    # 1. Groq
+    if api_availability['groq']:
+        logger.info("تلاش با Groq برای ترجمه")
+        try:
+            async with asyncio.timeout(15):
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": "mistral-saba-24b",
+                    "messages": [
+                        {"role": "system", "content": "You are a professional translator. Translate the given movie plot from English to Persian accurately and naturally. Ensure the translation is concise, clear, and suitable for a movie synopsis. Use only Persian and avoid English words."},
+                        {"role": "user", "content": f"Translate this movie plot to Persian: {plot}"}
+                    ],
+                    "max_tokens": 800,
+                    "temperature": 0.5
+                }
+                response = await post_api_request(url, data, headers, retries=3)
+                if response and response.get('choices'):
+                    translated_plot = clean_text_for_validation(response['choices'][0]['message']['content'].strip())
+                    if is_valid_plot(translated_plot) and is_farsi(translated_plot):
+                        logger.info(f"ترجمه Groq موفق برای {title}: {translated_plot[:100]}...")
+                        return translated_plot
+                    logger.warning(f"ترجمه Groq نامعتبر برای {title}: {translated_plot}")
+                else:
+                    logger.warning(f"پاسخ Groq خالی یا نامعتبر برای ترجمه: {response}")
+        except Exception as e:
+            logger.error(f"خطا در ترجمه Groq برای {title}: {str(e)}")
+            api_availability['groq'] = False
+            await send_admin_alert(None, f"❌ خطا در ترجمه Groq: {str(e)}.")
+
+    # 2. Gemini
+    if api_availability['gemini']:
+        logger.info("تلاش با Gemini برای ترجمه")
+        try:
+            async with asyncio.timeout(15):
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                prompt = f"خلاصه داستان فیلم را از انگلیسی به فارسی ترجمه کن. ترجمه باید دقیق، طبیعی و مناسب برای خلاصه داستان فیلم باشد. فقط از فارسی استفاده کن و از کلمات انگلیسی پرهیز کن. خلاصه داستان: {plot}"
+                response = await model.generate_content_async(prompt)
+                translated_plot = clean_text_for_validation(response.text.strip())
+                if is_valid_plot(translated_plot) and is_farsi(translated_plot):
+                    logger.info(f"ترجمه Gemini موفق برای {title}: {translated_plot[:100]}...")
+                    return translated_plot
+                logger.warning(f"ترجمه Gemini نامعتبر برای {title}: {translated_plot}")
+        except google_exceptions.ResourceExhausted:
+            logger.error("خطا: توکن Gemini تمام شده است")
+            api_availability['gemini'] = False
+            await send_admin_alert(None, "❌ توکن Gemini تمام شده است.")
+        except Exception as e:
+            logger.error(f"خطا در ترجمه Gemini برای {title}: {str(e)}")
+            api_availability['gemini'] = False
+            await send_admin_alert(None, f"❌ خطا در ترجمه Gemini: {str(e)}.")
+
+    logger.error(f"هیچ ترجمه‌ای برای {title} تولید نشد")
+    return None
 
 async def make_api_request(url, retries=5, timeout=15, headers=None):
     for attempt in range(retries):
@@ -412,10 +392,6 @@ async def load_posted_movies_from_file():
 async def get_movie_info(title):
     logger.info(f"دریافت اطلاعات برای فیلم: {title}")
     
-    # چک کردن فیلم‌های معروف
-    famous_movies = ['Interstellar', 'Inception', 'The Dark Knight', 'Pulp Fiction', 'Fight Club']
-    is_famous = title in famous_movies
-    
     # 1. TMDB
     logger.info(f"تلاش با TMDB برای {title}")
     encoded_title = urllib.parse.quote(title)
@@ -440,14 +416,26 @@ async def get_movie_info(title):
         tmdb_data_fa = await make_api_request(search_url_fa)
         tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
         logger.info(f"خلاصه داستان TMDB (فارسی) برای {tmdb_title}: {tmdb_plot[:100]}...")
-        if not tmdb_plot or not is_farsi(tmdb_plot):
-            logger.warning(f"خلاصه داستان TMDB نامعتبر یا غیرفارسی برای {tmdb_title}: {tmdb_plot}")
-            # تلاش با زبان انگلیسی
-            tmdb_plot = movie.get('overview', '')
-            logger.info(f"خلاصه داستان TMDB (انگلیسی) برای {tmdb_title}: {tmdb_plot[:100]}...")
-            if not tmdb_plot or is_farsi(tmdb_plot):
-                logger.warning(f"خلاصه داستان TMDB (انگلیسی) نامعتبر برای {tmdb_title}: {tmdb_plot}")
-                tmdb_plot = ''
+        
+        if tmdb_plot and is_farsi(tmdb_plot) and is_valid_plot(tmdb_plot):
+            logger.info(f"خلاصه داستان فارسی معتبر برای {tmdb_title}")
+            plot = shorten_plot(tmdb_plot)
+        else:
+            logger.warning(f"خلاصه داستان TMDB غیرفارسی یا نامعتبر برای {tmdb_title}: {tmdb_plot}")
+            # تلاش برای خلاصه داستان انگلیسی و ترجمه
+            tmdb_plot_en = movie.get('overview', '')
+            logger.info(f"خلاصه داستان TMDB (انگلیسی) برای {tmdb_title}: {tmdb_plot_en[:100]}...")
+            if tmdb_plot_en:
+                translated_plot = await translate_plot(tmdb_plot_en, tmdb_title)
+                if translated_plot:
+                    plot = shorten_plot(translated_plot)
+                else:
+                    logger.error(f"ترجمه خلاصه داستان برای {tmdb_title} ناموفق بود")
+                    return None
+            else:
+                logger.error(f"هیچ خلاصه داستان انگلیسی برای {tmdb_title} یافت نشد")
+                return None
+        
         tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
         
         trailer = None
@@ -462,24 +450,21 @@ async def get_movie_info(title):
         imdb_score = await get_imdb_score_tmdb(tmdb_title, genres)
         if not imdb_score:
             logger.warning(f"امتیاز معتبر برای {tmdb_title} یافت نشد")
-        else:
-            plot = shorten_plot(tmdb_plot) if tmdb_plot and is_farsi(tmdb_plot) else ''
-            if not plot and is_famous:
-                logger.info(f"استفاده از فال‌بک برای فیلم معروف {tmdb_title}")
-                plot = random.choice(FALLBACK_PLOTS['معروف'])
-            if plot:
-                previous_plots.append(plot)
-                if len(previous_plots) > 10:
-                    previous_plots.pop(0)
-            return {
-                'title': tmdb_title,
-                'year': tmdb_year,
-                'plot': plot,
-                'imdb': imdb_score,
-                'trailer': trailer,
-                'poster': tmdb_poster,
-                'genres': genres[:3]
-            }
+            return None
+        
+        previous_plots.append(plot)
+        if len(previous_plots) > 10:
+            previous_plots.pop(0)
+        
+        return {
+            'title': tmdb_title,
+            'year': tmdb_year,
+            'plot': plot,
+            'imdb': imdb_score,
+            'trailer': trailer,
+            'poster': tmdb_poster,
+            'genres': genres[:3]
+        }
     
     if tmdb_data_en and tmdb_data_en.get('results'):
         logger.info(f"فیلم {title} توسط TMDB رد شد، بررسی OMDb انجام نمی‌شود")
@@ -498,29 +483,37 @@ async def get_movie_info(title):
             return None
         
         imdb_score = await get_imdb_score_omdb(omdb_data.get('Title', title), genres)
-        if imdb_score:
-            plot = omdb_data.get('Plot', '')
-            logger.info(f"خلاصه داستان OMDb برای {omdb_data.get('Title', title)}: {plot[:100]}...")
-            if not plot or not is_farsi(plot):
-                logger.warning(f"خلاصه داستان OMDb نامعتبر یا غیرفارسی برای {omdb_data.get('Title', title)}: {plot}")
-                plot = ''
-                if is_famous:
-                    logger.info(f"استفاده از فال‌بک برای فیلم معروف {title}")
-                    plot = random.choice(FALLBACK_PLOTS['معروف'])
+        if not imdb_score:
+            logger.warning(f"امتیاز معتبر برای {omdb_data.get('Title', title)} یافت نشد")
+            return None
+        
+        plot = omdb_data.get('Plot', '')
+        logger.info(f"خلاصه داستان OMDb برای {omdb_data.get('Title', title)}: {plot[:100]}...")
+        if plot and is_farsi(plot) and is_valid_plot(plot):
+            logger.info(f"خلاصه داستان فارسی معتبر برای {omdb_data.get('Title', title)}")
             plot = shorten_plot(plot)
-            if plot:
-                previous_plots.append(plot)
-                if len(previous_plots) > 10:
-                    previous_plots.pop(0)
-            return {
-                'title': omdb_data.get('Title', title),
-                'year': omdb_data.get('Year', 'N/A'),
-                'plot': plot,
-                'imdb': imdb_score,
-                'trailer': None,
-                'poster': omdb_data.get('Poster', None),
-                'genres': genres[:3]
-            }
+        else:
+            logger.warning(f"خلاصه داستان OMDb غیرفارسی یا نامعتبر برای {omdb_data.get('Title', title)}: {plot}")
+            translated_plot = await translate_plot(plot, omdb_data.get('Title', title))
+            if translated_plot:
+                plot = shorten_plot(translated_plot)
+            else:
+                logger.error(f"ترجمه خلاصه داستان برای {omdb_data.get('Title', title)} ناموفق بود")
+                return None
+        
+        previous_plots.append(plot)
+        if len(previous_plots) > 10:
+            previous_plots.pop(0)
+        
+        return {
+            'title': omdb_data.get('Title', title),
+            'year': omdb_data.get('Year', 'N/A'),
+            'plot': plot,
+            'imdb': imdb_score,
+            'trailer': None,
+            'poster': omdb_data.get('Poster', None),
+            'genres': genres[:3]
+        }
     
     logger.error(f"هیچ API برای {title} جواب نداد")
     if api_errors['tmdb'] > 5 or api_errors['omdb'] > 5:
@@ -536,7 +529,7 @@ async def generate_comment(genres):
         try:
             async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. متن باید بین 20 تا 40 کلمه باشد و جمله آخر ناقص نباشد."
+                prompt = "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -570,7 +563,7 @@ async def generate_comment(genres):
                     "model": "mistral-saba-24b",
                     "messages": [
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 20 تا 40 کلمه باشد و جمله آخر ناقص نباشد."}
+                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."}
                     ],
                     "max_tokens": 800,
                     "temperature": 0.7
@@ -606,7 +599,7 @@ async def generate_comment(genres):
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 20 تا 40 کلمه باشد و جمله آخر ناقص نباشد."}
+                        {"role": "user", "content": "یک تحلیل جامع و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 7 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع، مفصل و متفاوت از تحلیل‌های قبلی باشد. درباره جزئیات بصری، کارگردانی، بازیگری، موسیقی متن، نقاط قوت و ضعف فیلم صحبت کن و مثال‌های مشخصی از صحنه‌ها یا عناصر فیلم ارائه بده. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن. متن باید بین 60 تا 90 کلمه باشد و جمله آخر ناقص نباشد."}
                     ],
                     max_tokens=800,
                     temperature=0.7
@@ -625,12 +618,8 @@ async def generate_comment(genres):
             api_availability['openai'] = False
 
     # 4. فال‌بک
-    logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
-    comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
-    previous_comments.append(comment)
-    if len(previous_comments) > 10:
-        previous_comments.pop(0)
-    return comment
+    logger.warning("هیچ تحلیلگری در دسترس نیست، تولید تحلیل ناموفق")
+    return None
 
 async def send_admin_alert(context: ContextTypes.DEFAULT_TYPE, message: str, reply_markup=None):
     try:
@@ -751,8 +740,8 @@ async def get_random_movie(max_retries=5):
             logger.info(f"فیلم‌های ارسال‌شده: {posted_movies}")
             comment = await generate_comment(movie_info['genres'])
             if not comment:
-                logger.error("تحلیل تولید نشد، استفاده از فال‌بک")
-                comment = get_fallback_by_genre(FALLBACK_COMMENTS, movie_info['genres'])
+                logger.error("تحلیل تولید نشد")
+                continue
             
             imdb_score = float(movie_info['imdb'].split('/')[0])
             logger.info(f"امتیاز برای {movie['title']}: {imdb_score}")
