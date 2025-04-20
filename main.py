@@ -467,7 +467,12 @@ async def get_movie_info(title):
                 'genres': genres[:3]
             }
     
-    # 2. OMDb
+    # اگه TMDB داده برگردانده اما فیلم رد شده، مستقیم None برگردون
+    if tmdb_data_en and tmdb_data_en.get('results'):
+        logger.info(f"فیلم {title} توسط TMDB رد شد، بررسی OMDb انجام نمی‌شود")
+        return None
+    
+    # 2. OMDb (فقط اگه TMDB کاملاً در دسترس نباشد)
     logger.info(f"تلاش با OMDb برای {title}")
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
     omdb_data = await make_api_request(omdb_url)
