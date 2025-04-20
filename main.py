@@ -113,36 +113,6 @@ GENRE_TRANSLATIONS = {
 }
 
 # --- فال‌بک‌ها ---
-FALLBACK_MOVIES = [
-    {
-        'title': 'Inception',
-        'year': '2010',
-        'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند. آیا موفق خواهد شد؟',
-        'imdb': '8.8/10',
-        'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
-        'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
-        'genres': ['علمی_تخیلی', 'هیجان_انگیز']
-    },
-    {
-        'title': 'The Matrix',
-        'year': '1999',
-        'plot': 'هکری که دنیایی شبیه‌سازی‌شده را کشف می‌کند، باید علیه ماشین‌هایی که بشریت را زندانی کرده‌اند بجنگد. حقیقت چیست؟ آیا او می‌تواند پیروز شود؟',
-        'imdb': '8.7/10',
-        'trailer': 'https://www.youtube.com/watch?v=m8e-FF8MsWU',
-        'poster': 'https://m.media-amazon.com/images/M/MV5BNzQzOTk3OTAtNDQ0Zi00ZTVkLWI0MTEtMDllZjNkYzNjNTc4L2ltYWdlXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg',
-        'genres': ['علمی_تخیلی', 'اکشن']
-    },
-    {
-        'title': 'The Shawshank Redemption',
-        'year': '1994',
-        'plot': 'مردی بی‌گناه به زندان می‌افتد و دوستی عمیقی با یک زندانی دیگر شکل می‌دهد. امید در تاریک‌ترین لحظات زنده می‌ماند. آیا او آزاد خواهد شد؟',
-        'imdb': '9.3/10',
-        'trailer': 'https://www.youtube.com/watch?v=6hB3S9bIaco',
-        'poster': 'https://m.media-amazon.com/images/M/MV5BMDFkYTc0MGEtZmNhMC00ZDIzLWFmNTEtODM1ZmRlYWMwMWFmXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg',
-        'genres': ['درام']
-    }
-]
-
 FALLBACK_PLOTS = {
     'اکشن': [
         "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟ پایان غیرمنتظره‌ای در انتظار است.",
@@ -382,7 +352,7 @@ async def get_imdb_score_omdb(title, genres=None):
         logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
         api_errors['omdb'] += 1
         return None
-    imdb_score = data.get('imdbRating', '0')
+    imdb_score = data.get('imdbRating', 'N/A')
     
     # چک کردن ژانرها
     is_animation = False
@@ -400,12 +370,21 @@ async def get_imdb_score_omdb(title, genres=None):
         logger.warning(f"فیلم {title} مستند است، رد شد")
         return None
     
-    min_score = 8.0 if is_animation else 6.0
-    if float(imdb_score) < min_score:
-        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
+    if imdb_score == 'N/A':
+        logger.warning(f"فیلم {title} امتیاز IMDb ندارد، رد شد")
         return None
-    api_errors['omdb'] = 0
-    return f"{float(imdb_score):.1f}/10"
+    
+    min_score = 8.0 if is_animation else 6.0
+    try:
+        score_float = float(imdb_score)
+        if score_float < min_score:
+            logger.warning(f"فیلم {title} امتیاز {score_float} دارد، رد شد (حداقل {min_score} لازم است)")
+            return None
+        api_errors['omdb'] = 0
+        return f"{score_float:.1f}/10"
+    except ValueError:
+        logger.warning(f"امتیاز IMDb برای {title} نامعتبر است: {imdb_score}")
+        return None
 
 async def check_poster(url):
     try:
@@ -522,7 +501,7 @@ async def get_movie_info(title):
             }
     
     # 2. OMDb
-    logger.info(f"تلاش با OMDb برای {title}")
+    logger.info(f"تل       با OMDb برای {title}")
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
     omdb_data = await make_api_request(omdb_url)
     if omdb_data and omdb_data.get('Response') == 'True':
@@ -578,6 +557,11 @@ async def fetch_movies_to_cache():
         
         page += 1
     
+    if not new_movies:
+        logger.warning("هیچ فیلم جدیدی برای کش یافت نشد")
+        await send_admin_alert(None, "⚠️ هیچ فیلم جدیدی برای کش یافت نشد. احتمالاً مشکل از APIهای TMDB یا OMDb است یا همه فیلم‌ها قبلاً ارسال شده‌اند.")
+        return
+    
     cached_movies = new_movies
     last_fetch_time = datetime.now()
     await save_cache_to_file()
@@ -593,12 +577,14 @@ async def get_random_movie():
         await fetch_movies_to_cache()
     
     if not cached_movies:
-        logger.error("هیچ فیلمی در کش موجود نیست، ارسال پست لغو شد")
+        logger.error("کش فیلم‌ها خالی است، ارسال پست لغو شد")
+        await send_admin_alert(None, "⚠️ کش فیلم‌ها خالی است. لطفاً APIهای TMDB و OMDb را بررسی کنید یا کش را به‌صورت دستی آپدیت کنید.")
         return None
     
     available_movies = [m for m in cached_movies if m['id'] not in posted_movies]
     if not available_movies:
         logger.warning("هیچ فیلم جدیدی در کش نیست، ارسال پست لغو شد")
+        await send_admin_alert(None, "⚠️ هیچ فیلم جدیدی در کش نیست. همه فیلم‌های موجود قبلاً ارسال شده‌اند یا مستند هستند.")
         return None
     
     for movie in available_movies:
@@ -610,6 +596,7 @@ async def get_random_movie():
         return movie
     
     logger.warning("هیچ فیلم غیرمستندی یافت نشد، ارسال پست لغو شد")
+    await send_admin_alert(None, "⚠️ هیچ فیلم غیرمستندی در کش یافت نشد. لطفاً کش را بررسی کنید.")
     return None
 
 async def generate_comment(genres):
@@ -664,7 +651,7 @@ async def generate_comment(genres):
                     {"role": "system", "content": "Write in Persian."},
                     {"role": "user", "content": "یک تحلیل جذاب و حرفه‌ای به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 4 جمله کامل (هر جمله با نقطه پایان یابد) و حداقل 50 کلمه. لحن سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                 ],
-                "max_tokens": 200,
+                "max_tokens": 250,
                 "temperature": 0.7
             }
             response = await post_api_request(url, data, headers, retries=3)
@@ -697,7 +684,7 @@ async def generate_comment(genres):
                     {"role": "system", "content": "Write in Persian."},
                     {"role": "user", "content": "یک تحلیل جذاب و حرفه‌ای به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در حداقل 4 جمله کامل (هر جمله با نقطه پایان یابد) و حداقل 50 کلمه. لحن سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                 ],
-                max_tokens=200,
+                max_tokens=250,
                 temperature=0.7
             )
             text = response.choices[0].message.content.strip()
@@ -763,22 +750,22 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
         movie = await get_random_movie()
         if not movie:
             logger.error("هیچ فیلمی برای پست کردن یافت نشد، پست لغو شد")
-            await send_admin_alert(context, "⚠️ هیچ فیلمی برای پست خودکار یافت نشد. لطفاً کش فیلم‌ها را بررسی کنید.")
             return
         
         logger.info(f"فیلم انتخاب شد: {movie['title']}")
+        caption = await format_movie_post(movie)  # دریافت کپشن
         if movie['poster']:
             await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=movie['poster'],
-                caption=format_movie_post(movie),
+                caption=caption,
                 parse_mode='HTML',
                 disable_notification=True
             )
         else:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
-                text=format_movie_post(movie),
+                text=caption,
                 parse_mode='HTML',
                 disable_notification=True
             )
@@ -1086,12 +1073,6 @@ async def run_bot():
     bot_app = app
     await app.initialize()
     await app.start()
-    await app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        close_loop=False,
-        stop_signals=[],
-        drop_pending_updates=True
-    )
     logger.info("بات تلگرام با موفقیت راه‌اندازی شد")
     return app
 
@@ -1113,15 +1094,24 @@ async def main():
     await load_cache_from_file()
     await load_posted_movies_from_file()
     
-    bot_task = asyncio.create_task(run_bot())
     web_runner = await run_web()
     
     try:
-        await bot_task
+        bot_app = await run_bot()
+        await bot_app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            close_loop=False,
+            stop_signals=[],
+            drop_pending_updates=True
+        )
+    except Exception as e:
+        logger.error(f"خطا در اجرای بات: {str(e)}")
+        await send_admin_alert(None, f"❌ خطا در اجرای بات: {str(e)}")
     finally:
-        await bot_app.updater.stop()
-        await bot_app.stop()
-        await bot_app.shutdown()
+        if bot_app and bot_app.running:
+            await bot_app.updater.stop()
+            await bot_app.stop()
+            await bot_app.shutdown()
         await web_runner.cleanup()
         if client:
             await client.close()
