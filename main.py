@@ -955,11 +955,14 @@ def format_movie_post(movie):
 🎬 <b>عنوان فیلم:</b>
 <b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
 
+{genres}
 📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
 """
     ]
-
-    📝 <b>خلاصه داستان:</b>
+    
+    if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
+        post_sections.append(f"""
+📝 <b>خلاصه داستان:</b>
 {rlm}{clean_text(movie['plot'])}
 """)
     else:
@@ -967,11 +970,6 @@ def format_movie_post(movie):
     
     if movie['comment']:
         post_sections.append(f"""
-        
-{genres}
-    if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
-        post_sections.append(f"""
-
 🍿 <b>حرف ما:</b>
 {rlm}{clean_text(movie['comment'])}
 """)
@@ -983,7 +981,7 @@ def format_movie_post(movie):
 """)
     
     return ''.join(post_sections)
-
+    
 def get_main_menu():
     toggle_text = "غیرفعال کردن ربات" if bot_enabled else "فعال کردن ربات"
     keyboard = [
