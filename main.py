@@ -201,16 +201,16 @@ def is_valid_plot(text):
     return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
 
 def is_valid_comment(text):
-    """چک کردن معتبر بودن تحلیل: حداقل 3 جمله و فارسی بودن"""
+    """چک کردن معتبر بودن تحلیل: حداقل 50 کلمه و فارسی بودن"""
     if not text:
         return False
     text = clean_text_for_validation(text)
     if not is_farsi(text):
         logger.warning(f"تحلیل رد شد: متن غیرفارسی - {text}")
         return False
-    sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
-    if len(sentences) < 3:
-        logger.warning(f"تحلیل رد شد: کمتر از 3 جمله - {text}")
+    words = text.split()
+    if len(words) < 50:
+        logger.warning(f"تحلیل رد شد: کمتر از 50 کلمه - {text}")
         return False
     if text in previous_comments:
         logger.warning(f"تحلیل رد شد: متن تکراری - {text}")
@@ -772,7 +772,8 @@ def format_movie_post(movie):
     
     post_sections = [
         f"""
-🎬 <b>عنوان فیلم:</b> <b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
+🎬 <b>عنوان فیلم:</b>
+<b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
 {genres}
 
 📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
