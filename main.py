@@ -636,7 +636,7 @@ async def generate_comment(genres):
         try:
             async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = """ یک تحلیل جامع و جذاب به زبان فارسی با لحنی حرفه‌ای و سینمایی بنویس. نقاط قوت و ضعف فیلم را شرح بده. اطمینان حاصل کن که هر جمله به طور کامل بیان شده و تحلیل با یک جمع‌بندی نهایی و روشن که دیدگاه کلی درباره فیلم را منتقل می‌کند، به پایان برسد. متن باید دقیقاً بین 80 تا 120 کلمه باشد."""
+                prompt = """ یک تحلیل جذاب به زبان فارسی با لحنی حرفه‌ای و سینمایی بنویس. نقاط قوت و ضعف فیلم را کوتاه شرح بده. اطمینان حاصل کن که هر جمله به طور کامل بیان شده و تحلیل با یک دیدگاه کلی درباره فیلم به پایان برسد. متن باید دقیقاً بین 50 تا 120 کلمه باشد."""
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -955,13 +955,6 @@ def format_movie_post(movie):
 🎬 <b>عنوان فیلم:</b>
 <b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
 
-{genres}
-📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
-"""
-    ]
-    
-    if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
-        post_sections.append(f"""
 📝 <b>خلاصه داستان:</b>
 {rlm}{clean_text(movie['plot'])}
 """)
@@ -970,6 +963,15 @@ def format_movie_post(movie):
     
     if movie['comment']:
         post_sections.append(f"""
+        
+{genres}
+📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
+"""
+    ]
+    
+    if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
+        post_sections.append(f"""
+
 🍿 <b>حرف ما:</b>
 {rlm}{clean_text(movie['comment'])}
 """)
