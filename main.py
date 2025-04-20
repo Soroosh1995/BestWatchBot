@@ -17,6 +17,21 @@ from openai import AsyncOpenAI
 import aiohttp.client_exceptions
 import re
 import certifi
+import atexit
+
+def cleanup():
+    logger.info("اجرای cleanup برای خاموش‌سازی...")
+    if 'bot_app' in globals() and bot_app.running:
+        asyncio.run(bot_app.updater.stop())
+        asyncio.run(bot_app.stop())
+        asyncio.run(bot_app.shutdown())
+    if 'web_runner' in globals():
+        asyncio.run(web_runner.cleanup())
+    if client:
+        asyncio.run(client.close())
+    logger.info("Cleanup کامل شد")
+
+atexit.register(cleanup)
 
 # --- تنظیمات اولیه ---
 logging.basicConfig(
