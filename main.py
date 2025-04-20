@@ -64,7 +64,6 @@ previous_comments = []
 bot_enabled = True
 CACHE_FILE = "movie_cache.json"
 POSTED_MOVIES_FILE = "posted_movies.json"
-API_CACHE = {}  # کش برای نتایج API
 
 # --- دیکشنری ترجمه ژانرها ---
 GENRE_TRANSLATIONS = {
@@ -89,80 +88,106 @@ GENRE_TRANSLATIONS = {
     'Unknown': 'سایر'
 }
 
-# --- فال‌بک‌های خلاصه داستان و تحلیل (5 مورد برای هر ژانر، طولانی‌تر) ---
+# --- فال‌بک‌های گسترده‌تر ---
+FALLBACK_MOVIES = [
+    {
+        'title': 'Inception',
+        'year': '2010',
+        'plot': 'دزدی که اسرار شرکت‌ها را با فناوری رویا می‌دزدد، باید ایده‌ای در ذهن یک مدیر بکارد. گذشته غم‌انگیز او ممکن است پروژه را به فاجعه بکشاند.',
+        'imdb': '8.8/10',
+        'trailer': 'https://www.youtube.com/watch?v=YoHD9XEInc0',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'هیجان_انگیز']
+    },
+    {
+        'title': 'The Matrix',
+        'year': '1999',
+        'plot': 'هکری که دنیایی شبیه‌سازی‌شده را کشف می‌کند، باید علیه ماشین‌هایی که بشریت را زندانی کرده‌اند بجنگد.',
+        'imdb': '8.7/10',
+        'trailer': 'https://www.youtube.com/watch?v=m8e-FF8MsWU',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BNzQzOTk3OTAtNDQ0Zi00ZTVkLWI0MTEtMDllZjNkYzNjNTc4L2ltYWdlXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'اکشن']
+    },
+    {
+        'title': 'The Shawshank Redemption',
+        'year': '1994',
+        'plot': 'مردی بی‌گناه به زندان می‌افتد و دوستی عمیقی با یک زندانی دیگر شکل می‌دهد. آیا امیدی برای آزادی وجود دارد؟',
+        'imdb': '9.3/10',
+        'trailer': 'https://www.youtube.com/watch?v=6hB3S9bIaco',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMDFkYTc0MGEtZmNhMC00ZDIzLWFmNTEtODM1ZmRlYWMwMWFmXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_SX300.jpg',
+        'genres': ['درام']
+    },
+    {
+        'title': 'Interstellar',
+        'year': '2014',
+        'plot': 'گروهی از فضانوردان برای یافتن خانه‌ای جدید برای بشریت به سفری بین‌ستاره‌ای می‌روند. آیا موفق خواهند شد؟',
+        'imdb': '8.6/10',
+        'trailer': 'https://www.youtube.com/watch?v=zSWdZVtXT7E',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BZjdkOTU3MDktN2IxOS00OGYyLWFhMjktYzk2ODVhZmM0YzkxXkEyXkFqcGdeQXVyNjU0OTQ0OTY@._V1_SX300.jpg',
+        'genres': ['علمی_تخیلی', 'درام']
+    },
+    {
+        'title': 'Fight Club',
+        'year': '1999',
+        'plot': 'مردی ناامید باشگاهی مخفی برای مبارزه راه می‌اندازد، اما همه‌چیز از کنترل خارج می‌شود.',
+        'imdb': '8.8/10',
+        'trailer': 'https://www.youtube.com/watch?v=SUXWAEX2jlg',
+        'poster': 'https://m.media-amazon.com/images/M/MV5BMmEzNTkxYjQtZTc0MC00YTVjLTg5ZTEtZWMwOWVlYzY0NWIwXkEyXkFqcGdeQXVyNzkwMjQ5NzM@._V1_SX300.jpg',
+        'genres': ['درام', 'هیجان_انگیز']
+    }
+]
+
 FALLBACK_PLOTS = {
     'اکشن': [
-        "جهانی پر از هرج‌ومرج که قهرمانی شجاع در برابر دشمنانی بی‌رحم می‌ایستد. نبردهای نفس‌گیر و تعقیب‌وگریزهای پرهیجان، قلب شما را به تپش می‌اندازد. آیا او می‌تواند عدالت را برقرار کند یا تاریکی پیروز خواهد شد؟",
-        "داستانی حماسی از یک ماموریت خطرناک برای نجات بشریت. صحنه‌های اکشن خیره‌کننده و نقشه‌های پیچیده دشمن، شما را تا لحظه آخر میخکوب می‌کند. آیا قهرمان موفق خواهد شد یا همه‌چیز به فاجعه ختم می‌شود؟",
-        "مبارزه‌ای بی‌امان در دنیایی که قانون وجود ندارد. قهرمانی تنها با مهارت‌های خارق‌العاده‌اش علیه سازمانی قدرتمند می‌جنگد. آیا او می‌تواند حقیقت را آشکار کند یا در این راه نابود خواهد شد؟",
-        "جهانی که در آستانه نابودی است و تنها یک نفر می‌تواند آن را نجات دهد. انفجارها، درگیری‌های مهیج و داستانی پر از خیانت، شما را به وجد می‌آورد. آیا پایان این ماجرا روشن خواهد بود؟",
-        "ماجراجویی‌ای پر از خطر که قهرمان با گذشته‌ای تاریک، برای رهایی از دشمنانش می‌جنگد. صحنه‌های اکشن پویا و داستانی عمیق، شما را تا پایان همراه می‌کند. آیا او به آرامش خواهد رسید؟",
+        "ماجراجویی پرهیجانی که قهرمان با دشمنان قدرتمند روبرو می‌شود. نبردهای نفس‌گیر شما را میخکوب می‌کند. آیا او می‌تواند جهان را نجات دهد؟",
+        "داستانی پر از تعقیب و گریز و انفجارهای مهیج. قهرمانی که برای عدالت می‌جنگد. آیا او پیروز خواهد شد؟",
+        "مبارزه‌ای حماسی برای نجات بشریت. صحنه‌های اکشن خیره‌کننده و داستانی پرتعلیق. آیا پایان خوشی در انتظار است؟",
     ],
     'درام': [
-        "روایتی عمیق از زندگی مردی که با انتخاب‌های سخت و روابط پیچیده روبروست. گذشته او سایه‌ای سنگین بر آینده‌اش انداخته و هر تصمیم، سرنوشتش را تغییر می‌دهد. آیا او می‌تواند راه خود را پیدا کند یا در غم غرق خواهد شد؟",
-        "داستانی احساسی از عشق، ازدست‌رفتن و تلاش برای بازسازی زندگی. شخصیت‌هایی که با شجاعت در برابر مشکلات ایستادگی می‌کنند، قلب شما را لمس خواهند کرد. آیا امیدی برای پایان خوش وجود دارد؟",
-        "سفری درونی در دل چالش‌های زندگی که شخصیت اصلی را به مرزهای احساسی‌اش می‌برد. روابط خانوادگی و رازهای پنهان، داستان را به اوج می‌رسانند. آیا حقیقت او را آزاد خواهد کرد؟",
-        "روایتی تکان‌دهنده از مبارزه یک انسان با خودش و دنیای اطرافش. هر لحظه پر از احساسات عمیق و تصمیم‌هایی است که آینده را رقم می‌زنند. آیا او به آرامش خواهد رسید یا در تنهایی غرق می‌شود؟",
-        "داستانی که زندگی یک خانواده را در بزنگاهی حساس به تصویر می‌کشد. عشق، خیانت و بخشش در هم تنیده شده‌اند تا شما را به فکر فرو ببرند. آیا این خانواده دوباره متحد خواهد شد؟",
+        "داستانی عمیق از روابط انسانی و انتخاب‌های سخت. زندگی شخصیتی پیچیده که قلب شما را لمس می‌کند. آیا او راه خود را پیدا خواهد کرد؟",
+        "روایتی احساسی از چالش‌های زندگی و عشق. تصمیم‌هایی که آینده را تغییر می‌دهند. آیا پایان خوشی در انتظار است؟",
+        "سفری احساسی در دل مشکلات زندگی. شخصیت‌هایی که با شجاعت مبارزه می‌کنند. آیا امید پیروز می‌شود؟",
     ],
     'کمدی': [
-        "ماجراهای خنده‌داری که گروهی از دوستان را در موقعیت‌های عجیب و غریب قرار می‌دهد. شوخی‌های هوشمندانه و دیالوگ‌های طنزآمیز، شما را از خنده روده‌بر می‌کند. آیا آن‌ها از این مخمصه‌ها جان سالم به در می‌برند؟",
-        "داستانی پر از سوءتفاهم‌های بامزه که زندگی شخصیت اصلی را زیرورو می‌کند. هر لحظه پر از خنده و موقعیت‌های غیرمنتظره است که شما را سرگرم می‌کند. آیا همه‌چیز به خیر و خوشی تمام خواهد شد؟",
-        "کمدی‌ای که با طنز ظریف و شخصیت‌های دوست‌داشتنی، شما را به دنیایی شاد می‌برد. ماجراهای غیرمنتظره و دیالوگ‌های بامزه، لحظات خوشی را رقم می‌زنند. آیا پایان این داستان به اندازه شروعش خنده‌دار خواهد بود؟",
-        "روایتی طنزآمیز از تلاش یک فرد معمولی برای رسیدن به هدفی بزرگ. موقعیت‌های خنده‌دار و شخصیت‌های عجیب، شما را تا آخر همراه می‌کنند. آیا او موفق خواهد شد یا باز هم همه‌چیز خراب می‌شود؟",
-        "داستانی که با شوخی‌های پیاپی و ماجراهای بامزه، شما را به خنده می‌اندازد. گروهی از افراد درگیر موقعیتی غیرعادی می‌شوند که راه فراری از آن نیست. آیا این ماجرا به پایان خوشی خواهد رسید؟",
+        "ماجراهای خنده‌داری که زندگی را زیرورو می‌کنند. گروهی از دوستان که در موقعیت‌های عجیب گیر می‌افتند. آیا از این مخمصه خلاص می‌شوند؟",
+        "داستانی پر از شوخی و موقعیت‌های بامزه. شخصیت‌هایی که شما را به خنده می‌اندازند. آیا همه‌چیز به خیر می‌گذرد؟",
+        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. ماجراهایی که خنده را به لب‌هایتان می‌آورد. آیا پایان شادی در انتظار است؟",
     ],
     'علمی_تخیلی': [
-        "جهانی در آینده که فناوری‌های پیشرفته، بشریت را به مرزهای جدیدی برده است. اکتشافاتی خطرناک و رازهایی پنهان، شما را به فکر فرو می‌برند. آیا حقیقت آشکار خواهد شد یا بشریت نابود می‌شود؟",
-        "داستانی از سفر در زمان که قوانین واقعیت را به چالش می‌کشد. شخصیت‌هایی که با پارادوکس‌های پیچیده روبرو می‌شوند، شما را میخکوب می‌کنند. آیا آن‌ها می‌توانند تاریخ را تغییر دهند؟",
-        "ماجراجویی‌ای در فضایی ناشناخته که موجودات بیگانه و فناوری‌های عجیب را به تصویر می‌کشد. داستان پر از هیجان و معما، شما را تا پایان همراه می‌کند. آیا بشریت در این جهان تنها خواهد ماند؟",
-        "روایتی از جهانی که هوش مصنوعی کنترل را به دست گرفته است. مبارزه‌ای برای بقا و کشف حقیقت، شما را درگیر خود می‌کند. آیا انسان‌ها دوباره کنترل را به دست خواهند گرفت؟",
-        "داستانی که در سیاره‌ای دور رخ می‌دهد و گروهی از کاوشگران را در برابر ناشناخته‌ها قرار می‌دهد. اکتشافات علمی و خطرات غیرمنتظره، شما را به وجد می‌آورد. آیا آن‌ها به خانه بازخواهند گشت؟",
+        "جهانی در آینده که تکنولوژی همه‌چیز را تغییر داده. ماجراجویی‌ای برای کشف حقیقت پشت یک راز بزرگ. آیا بشریت نجات پیدا می‌کند؟",
+        "داستانی از سفر در زمان و فضا. اکتشافاتی که جهان را دگرگون می‌کنند. آیا حقیقت آشکار خواهد شد؟",
+        "ماجراجویی‌ای در فضایی ناشناخته. فناوری‌های عجیب و داستانی پیچیده. آیا قهرمانان موفق می‌شوند؟",
     ],
     'سایر': [
-        "داستانی متفاوت که شما را به سفری غیرمنتظره در دنیایی ناشناخته می‌برد. شخصیت‌هایی با گذشته‌های پیچیده و تصمیم‌هایی که سرنوشت را تغییر می‌دهند. آیا پایان این ماجرا شما را شگفت‌زده خواهد کرد؟",
-        "روایتی جذاب از زندگی و مبارزه برای یافتن معنا در جهانی پر از ابهام. هر لحظه پر از احساسات و معماهایی است که شما را به فکر فرو می‌برند. آیا حقیقت در پایان آشکار خواهد شد؟",
-        "ماجراجویی‌ای که با ترکیبی از احساسات و هیجان، شما را درگیر خود می‌کند. شخصیت‌هایی که با شجاعت در برابر ناشناخته‌ها می‌ایستند. آیا این داستان پایانی خوش خواهد داشت؟",
-        "داستانی که شما را به دنیایی پر از رمز و راز می‌برد و هر لحظه غافلگیری جدیدی دارد. روابط انسانی و انتخاب‌های سخت، قلب و ذهن شما را تسخیر می‌کنند. آیا پایان این سفر رضایت‌بخش خواهد بود؟",
-        "روایتی که با پیچش‌های داستانی و شخصیت‌های عمیق، شما را تا لحظه آخر نگه می‌دارد. هر تصمیم، آینده‌ای جدید را رقم می‌زند. آیا این داستان به پایان خوشی خواهد رسید؟",
+        "داستانی جذاب که شما را به سفری غیرمنتظره می‌برد. شخصیت‌هایی که با چالش‌های بزرگ روبرو می‌شوند. آیا پایان خوشی در انتظار است؟",
+        "روایتی متفاوت که شما را غافلگیر می‌کند. ماجراهایی که قلب و ذهن را درگیر می‌کنند. آیا همه‌چیز درست می‌شود؟",
     ]
 }
 
 FALLBACK_COMMENTS = {
     'اکشن': [
-        "این فیلم با صحنه‌های اکشن پویا و کارگردانی بی‌نقص، تجربه‌ای نفس‌گیر را ارائه می‌دهد. داستان پر از هیجان و شخصیت‌پردازی قوی، شما را تا لحظه آخر درگیر نگه می‌دارد. با این حال، برخی لحظات ممکن است برای مخاطبان حساس کمی خشن به نظر برسند.",
-        "فیلمی که با ریتم تند و جلوه‌های بصری خیره‌کننده، استانداردهای ژانر اکشن را بازتعریف می‌کند. بازیگران با شیمی عالی و داستان پر از تعلیق، ارزش تماشای چندباره را دارد. تنها نقطه ضعف، دیالوگ‌هایی است که گاهی کلیشه‌ای به نظر می‌رسند.",
-        "اکشنی حماسی که با نبردهای تماشایی و داستانی عمیق، شما را به دنیایی پر از خطر می‌برد. کارگردانی خلاقانه و موسیقی متن قدرتمند، تجربه‌ای سینمایی را کامل می‌کنند. فقط برخی صحنه‌ها ممکن است بیش از حد طولانی باشند.",
-        "این فیلم با ترکیبی از اکشن بی‌وقفه و داستانی پر از خیانت، شما را میخکوب می‌کند. جلوه‌های ویژه و طراحی صحنه‌ها در سطحی بی‌نظیر هستند. با این حال، پیچیدگی برخی خطوط داستانی ممکن است نیاز به توجه بیشتری داشته باشد.",
-        "داستانی پر از آدرنالین که با صحنه‌های اکشن خلاقانه و شخصیت‌هایی به‌یادماندنی، شما را سرگرم می‌کند. کارگردانی پرانرژی و موسیقی متن حماسی، نقاط قوت اصلی آن هستند. فقط پایان‌بندی ممکن است برای برخی غیرمنتظره باشد.",
+        "این فیلم با صحنه‌های اکشن نفس‌گیر و داستان پرهیجان، شما را به صندلی میخکوب می‌کند. کارگردانی پویا و جلوه‌های بصری خیره‌کننده از نقاط قوت آن است. فقط گاهی ریتم تند ممکن است کمی گیج‌کننده باشد.",
+        "فیلمی پر از هیجان و صحنه‌های اکشن تماشایی. داستان سرگرم‌کننده و بازیگری قوی، آن را جذاب کرده است. فقط برخی لحظات ممکن است قابل پیش‌بینی باشند.",
+        "اکشنی پرشور با داستانی مهیج که شما را تا آخر نگه می‌دارد. جلوه‌های ویژه عالی هستند. فقط برخی دیالوگ‌ها می‌توانستند قوی‌تر باشند.",
     ],
     'درام': [
-        "این فیلم با روایتی عمیق و احساسی، شما را به سفری در دل روابط انسانی می‌برد. بازیگری بی‌نقص و فیلم‌برداری هنرمندانه، هر صحنه را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی لحظات ممکن است برای مخاطبان عجول چالش‌برانگیز باشد.",
-        "داستانی تکان‌دهنده که با کاوش در احساسات و انتخاب‌های سخت، قلب شما را تسخیر می‌کند. موسیقی متن تأثیرگذار و کارگردانی حساس، تجربه‌ای عاطفی را رقم می‌زنند. با این حال، پایان‌بندی ممکن است برای همه رضایت‌بخش نباشد.",
-        "روایتی که با شخصیت‌پردازی قوی و دیالوگ‌های عمیق، شما را به فکر فرو می‌برد. هر لحظه پر از احساساتی است که شما را با شخصیت‌ها همراه می‌کند. فقط برخی صحنه‌های طولانی ممکن است نیاز به صبر بیشتری داشته باشند.",
-        "این فیلم با داستانی چندلایه و بازیگری فوق‌العاده، شما را درگیر احساسات پیچیده‌ای می‌کند. کارگردانی دقیق و فیلم‌برداری زیبا، هر فریم را به یک تابلوی نقاشی تبدیل کرده‌اند. فقط برخی موضوعات سنگین ممکن است برای همه مناسب نباشند.",
-        "داستانی که با ظرافت به مسائل انسانی می‌پردازد و شما را به تأمل وامی‌دارد. بازیگران با اجراهای قدرتمند و موسیقی متن احساسی، این اثر را به‌یادماندنی کرده‌اند. با این حال، برخی لحظات ممکن است بیش از حد غم‌انگیز باشند.",
+        "این فیلم با داستانی عمیق و احساسی، قلب شما را تسخیر می‌کند. بازیگری بی‌نقص و کارگردانی حساس، آن را به اثری ماندگار تبدیل کرده‌اند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
+        "روایتی تکان‌دهنده از زندگی و احساسات انسانی. فیلم‌برداری زیبا و موسیقی متن تأثیرگذار، آن را خاص کرده‌اند. فقط پایان ممکن است برای همه رضایت‌بخش نباشد.",
+        "داستانی احساسی که شما را به فکر فرو می‌برد. شخصیت‌پردازی قوی و کارگردانی هنرمندانه از نقاط قوت آن است. فقط برخی لحظات ممکن است بیش از حد طولانی باشند.",
     ],
     'کمدی': [
-        "این فیلم با طنز هوشمندانه و شخصیت‌های دوست‌داشتنی، شما را به خنده وامی‌دارد. دیالوگ‌های بامزه و کارگردانی پرانرژی، لحظات شادی را رقم می‌زنند. فقط برخی شوخی‌ها ممکن است به مذاق همه خوش نیایند.",
-        "کمدی‌ای که با موقعیت‌های خنده‌دار و بازیگری عالی، حال شما را خوب می‌کند. داستان روان و شیمی بین بازیگران، آن را به اثری سرگرم‌کننده تبدیل کرده است. با این حال، ریتم در برخی صحنه‌ها ممکن است کمی افت کند.",
-        "داستانی پر از شوخی‌های پیاپی که با کارگردانی خلاقانه، شما را سرگرم می‌کند. شخصیت‌های عجیب و غریب و دیالوگ‌های طنزآمیز، نقاط قوت اصلی آن هستند. فقط برخی جوک‌ها ممکن است برای مخاطبان خاص جذاب نباشند.",
-        "این فیلم با طنزی ظریف و ماجراهای غیرمنتظره، شما را به دنیایی پر از خنده می‌برد. بازیگران با اجراهای درخشان و داستان بامزه، تجربه‌ای لذت‌بخش را ارائه می‌دهند. فقط برخی لحظات ممکن است بیش از حد اغراق‌آمیز باشند.",
-        "روایتی طنزآمیز که با شوخی‌های خلاقانه و شخصیت‌پردازی قوی، شما را تا پایان همراه می‌کند. کارگردانی پویا و موسیقی متن شاد، این اثر را به یک کمدی به‌یادماندنی تبدیل کرده‌اند. فقط پایان‌بندی ممکن است کمی غیرمنتظره باشد.",
+        "این فیلم با شوخی‌های بامزه و داستان سرگرم‌کننده، شما را به خنده می‌اندازد. بازیگران شیمی فوق‌العاده‌ای دارند و کارگردانی پرانرژی است. فقط برخی جوک‌ها ممکن است تکراری به نظر برسند.",
+        "داستانی سبک و خنده‌دار که حال شما را خوب می‌کند. شخصیت‌پردازی قوی و دیالوگ‌های هوشمندانه از نقاط قوت آن است. فقط ریتم در برخی صحنه‌ها افت می‌کند.",
+        "کمدی‌ای که با طنز هوشمندانه شما را سرگرم می‌کند. بازیگران فوق‌العاده و داستان بامزه از نقاط قوت آن است. فقط برخی شوخی‌ها ممکن است به مذاق همه خوش نیاید.",
     ],
     'علمی_تخیلی': [
-        "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به آینده‌ای ناشناخته می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی، تجربه‌ای سینمایی را کامل می‌کنند. فقط برخی مفاهیم پیچیده ممکن است نیاز به توجه بیشتری داشته باشند.",
-        "داستانی که با کاوش در فناوری‌های تخیلی و معضلات اخلاقی، ذهن شما را به چالش می‌کشد. فیلم‌برداری خیره‌کننده و بازیگری قوی، آن را به اثری ماندگار تبدیل کرده‌اند. با این حال، برخی جزئیات ممکن است برای همه قابل فهم نباشند.",
-        "روایتی علمی‌تخیلی که با ایده‌های نوآورانه و داستانی پر از معما، شما را مجذوب می‌کند. جلوه‌های ویژه و طراحی صحنه‌ها در سطحی بی‌نظیر هستند. فقط ریتم کند برخی صحنه‌ها ممکن است صبر شما را بیازماید.",
-        "این فیلم با ترکیبی از اکتشافات علمی و درام انسانی، شما را به دنیایی متفاوت می‌برد. کارگردانی خلاقانه و شخصیت‌پردازی عمیق، نقاط قوت اصلی آن هستند. فقط برخی موضوعات ممکن است برای مخاطبان عام سنگین باشند.",
-        "داستانی که با فناوری‌های پیشرفته و معماهای فلسفی، شما را درگیر خود می‌کند. بازیگران با اجراهای قدرتمند و جلوه‌های بصری تماشایی، این اثر را به‌یادماندنی کرده‌اند. فقط پایان‌بندی ممکن است برای برخی مبهم باشد.",
+        "این فیلم با داستانی خلاقانه و جلوه‌های بصری خیره‌کننده، شما را به دنیایی دیگر می‌برد. کارگردانی هوشمندانه و موسیقی متن حماسی از نقاط قوت آن است. فقط برخی مفاهیم ممکن است پیچیده باشند.",
+        "جهانی فانتزی که با داستان‌سرایی قوی شما را مجذوب می‌کند. تکنولوژی‌های تخیلی و کارگردانی خلاقانه، آن را دیدنی کرده‌اند. فقط برخی جزئیات ممکن است گنگ باشند.",
+        "داستانی علمی‌تخیلی که ذهن شما را به چالش می‌کشد. جلوه‌های ویژه و داستان‌سرایی خلاقانه از نقاط قوت آن است. فقط ممکن است برای همه قابل فهم نباشد.",
     ],
     'سایر': [
-        "این فیلم با داستانی جذاب و کارگردانی قوی، شما را به سفری غیرمنتظره می‌برد. بازیگری عالی و روایت روان، آن را به اثری سرگرم‌کننده تبدیل کرده‌اند. فقط برخی لحظات ممکن است برای مخاطبان خاص کند به نظر برسند.",
-        "روایتی متفاوت که با پیچش‌های داستانی و شخصیت‌های عمیق، شما را غافلگیر می‌کند. فیلم‌برداری زیبا و موسیقی متن تأثیرگذار، تجربه‌ای سینمایی را رقم می‌زنند. با این حال، برخی صحنه‌ها ممکن است نیاز به صبر بیشتری داشته باشند.",
-        "داستانی که با ترکیبی از احساسات و هیجان، شما را درگیر خود می‌کند. کارگردانی خلاقانه و بازیگری قوی، این اثر را به‌یادماندنی کرده‌اند. فقط برخی موضوعات ممکن است برای همه جذاب نباشند.",
-        "این فیلم با روایتی چندلایه و شخصیت‌پردازی عمیق، شما را به فکر فرو می‌برد. جلوه‌های بصری و موسیقی متن، هر صحنه را به اثری هنری تبدیل کرده‌اند. فقط ریتم برخی صحنه‌ها ممکن است برای مخاطبان عجول چالش‌برانگیز باشد.",
-        "داستانی که با کاوش در روابط انسانی و معماهای زندگی، شما را مجذوب می‌کند. بازیگران با اجراهای درخشان و کارگردانی حساس، این اثر را به‌یادماندنی کرده‌اند. فقط پایان‌بندی ممکن است برای برخی غیرمنتظره باشد.",
+        "فیلمی که با داستان‌سرایی جذاب و کارگردانی قوی، شما را سرگرم می‌کند. بازیگری خوب و روایت روان از نقاط قوت آن است. فقط برخی لحظات ممکن است کند باشند.",
+        "داستانی متفاوت که شما را غافلگیر می‌کند. کارگردانی هنرمندانه و بازیگری قوی، آن را دیدنی کرده‌اند. فقط برخی صحنه‌ها ممکن است طولانی به نظر برسند.",
     ]
 }
 
@@ -176,17 +201,18 @@ api_errors = {
 def clean_text(text):
     if not text or text == 'N/A':
         return None
-    return text[:500]  # افزایش محدودیت متن به 500 کاراکتر
+    return text[:300]
 
 def shorten_plot(text, max_sentences=3):
     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
     return '. '.join(sentences[:max_sentences]) + ('.' if sentences else '')
 
 def clean_text_for_validation(text):
+    """تمیز کردن متن برای اعتبارسنجی: حذف فاصله‌های اضافی و کاراکترهای غیرضروری"""
     if not text:
         return ""
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'[\n\t]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)  # جایگزینی فاصله‌های اضافی با یک فاصله
+    text = re.sub(r'[\n\t]', ' ', text)  # حذف خط جدید و تب
     text = text.strip()
     return text
 
@@ -195,12 +221,13 @@ def is_farsi(text):
     return bool(re.search(farsi_chars, text))
 
 def is_valid_plot(text):
-    if not text or len(text.split()) < 10:  # حداقل 10 کلمه برای خلاصه داستان
+    if not text or len(text.split()) < 5:
         return False
     sentences = text.split('. ')
-    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 2  # حداقل 2 جمله
+    return len([s for s in sentences if s.strip() and s.strip()[-1] in '.!؟']) >= 1
 
 def is_valid_comment(text):
+    """چک کردن معتبر بودن تحلیل: حداقل 3 جمله و فارسی بودن"""
     if not text:
         return False
     text = clean_text_for_validation(text)
@@ -225,28 +252,11 @@ def get_fallback_by_genre(options, genres):
     available = [opt for genre in options for opt in options[genre] if opt not in previous_comments]
     return random.choice(available) if available else options['سایر'][0]
 
-async def cache_api_request(url, retries=5, timeout=15, headers=None):
-    """کش‌گذاری نتایج درخواست‌های API برای حداقل 1 ساعت"""
-    current_time = datetime.now()
-    if url in API_CACHE:
-        cached_data, timestamp = API_CACHE[url]
-        if (current_time - timestamp).total_seconds() < 3600:  # 1 ساعت
-            logger.info(f"استفاده از داده کش‌شده برای {url}")
-            return cached_data
-        else:
-            logger.info(f"کش منقضی شده برای {url}")
-    
-    data = await make_api_request(url, retries, timeout, headers)
-    if data:
-        API_CACHE[url] = (data, current_time)
-        logger.info(f"داده جدید کش شد برای {url}")
-    return data
-
 async def make_api_request(url, retries=5, timeout=15, headers=None):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
-                async with session.get(url, headers=headers, ssl=certifi.where()) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
                         await asyncio.sleep(2 ** attempt)
@@ -280,7 +290,7 @@ async def post_api_request(url, data, headers, retries=3, timeout=15):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
-                async with session.post(url, json=data, headers=headers, ssl=certifi.where()) as response:
+                async with session.post(url, json=data, headers=headers) as response:
                     if response.status == 429:
                         logger.warning(f"خطای 429: Rate Limit، تلاش {attempt + 1}")
                         await asyncio.sleep(2 ** attempt)
@@ -313,7 +323,7 @@ async def get_imdb_score_tmdb(title, genres=None):
     logger.info(f"دریافت اطلاعات TMDB برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-    data = await cache_api_request(url)
+    data = await make_api_request(url)
     if not data or not data.get('results'):
         logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
         api_errors['tmdb'] += 1
@@ -321,22 +331,15 @@ async def get_imdb_score_tmdb(title, genres=None):
     movie = data['results'][0]
     imdb_score = movie.get('vote_average', 0)
     
-    # چک کردن ژانرها
+    # چک کردن ژانر انیمیشن
     is_animation = False
-    is_documentary = False
     if genres:
         is_animation = 'انیمیشن' in genres
-        is_documentary = 'مستند' in genres
     else:
         details_url = f"https://api.themoviedb.org/3/movie/{movie.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
-        details_data = await cache_api_request(details_url)
+        details_data = await make_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
         is_animation = 'انیمیشن' in genres
-        is_documentary = 'مستند' in genres
-    
-    if is_documentary:
-        logger.warning(f"فیلم {title} مستند است، رد شد")
-        return None
     
     min_score = 8.0 if is_animation else 6.0
     if imdb_score < min_score:
@@ -349,28 +352,21 @@ async def get_imdb_score_omdb(title, genres=None):
     logger.info(f"دریافت اطلاعات OMDb برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-    data = await cache_api_request(url)
+    data = await make_api_request(url)
     if not data or data.get('Response') == 'False':
         logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
         api_errors['omdb'] += 1
         return None
     imdb_score = data.get('imdbRating', '0')
     
-    # چک کردن ژانرها
+    # چک کردن ژانر انیمیشن
     is_animation = False
-    is_documentary = False
     if genres:
         is_animation = 'انیمیشن' in genres
-        is_documentary = 'مستند' in genres
     else:
         genres = data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
         is_animation = 'انیمیشن' in genres
-        is_documentary = 'مستند' in genres
-    
-    if is_documentary:
-        logger.warning(f"فیلم {title} مستند است، رد شد")
-        return None
     
     min_score = 8.0 if is_animation else 6.0
     if float(imdb_score) < min_score:
@@ -386,7 +382,7 @@ async def check_poster(url):
                 if response.status != 200:
                     return False
                 content_length = response.headers.get('Content-Length')
-                if content_length and int(content_length) > 2 * 1024 * 1024:  # محدود به 2MB
+                if content_length and int(content_length) > 5 * 1024 * 1024:  # 5MB
                     logger.warning(f"پوستر {url} بیش از حد بزرگ است")
                     return False
                 return True
@@ -449,28 +445,25 @@ async def get_movie_info(title):
     logger.info(f"تلاش با TMDB برای {title}")
     encoded_title = urllib.parse.quote(title)
     search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
-    tmdb_data_en = await cache_api_request(search_url_en)
+    tmdb_data_en = await make_api_request(search_url_en)
     if tmdb_data_en and tmdb_data_en.get('results'):
         movie = tmdb_data_en['results'][0]
         movie_id = movie.get('id')
         tmdb_title = movie.get('title', title)
-        tmdb_poster = f"https://image.tmdb.org/t/p/w300{movie.get('poster_path')}" if movie.get('poster_path') else None  # سایز کوچکتر
+        tmdb_poster = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
         
         details_url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=en-US"
-        details_data = await cache_api_request(details_url)
+        details_data = await make_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
-        if 'مستند' in genres:
-            logger.warning(f"فیلم {tmdb_title} مستند است، رد شد")
-            return None
         
         search_url_fa = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=fa-IR"
-        tmdb_data_fa = await cache_api_request(search_url_fa)
+        tmdb_data_fa = await make_api_request(search_url_fa)
         tmdb_plot = tmdb_data_fa['results'][0].get('overview', '') if tmdb_data_fa.get('results') else ''
         tmdb_year = tmdb_data_fa['results'][0].get('release_date', 'N/A')[:4] if tmdb_data_fa.get('results') else 'N/A'
         
         trailer = None
         videos_url = f"https://api.themoviedb.org/3/movie/{movie_id}/videos?api_key={TMDB_API_KEY}&language=en"
-        videos_data = await cache_api_request(videos_url)
+        videos_data = await make_api_request(videos_url)
         if videos_data and videos_data.get('results'):
             for video in videos_data['results']:
                 if video['type'] == 'Trailer' and video['site'] == 'YouTube':
@@ -498,13 +491,10 @@ async def get_movie_info(title):
     # 2. OMDb
     logger.info(f"تلاش با OMDb برای {title}")
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
-    omdb_data = await cache_api_request(omdb_url)
+    omdb_data = await make_api_request(omdb_url)
     if omdb_data and omdb_data.get('Response') == 'True':
         genres = omdb_data.get('Genre', '').split(', ')
         genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-        if 'مستند' in genres:
-            logger.warning(f"فیلم {title} مستند است، رد شد")
-            return None
         imdb_score = await get_imdb_score_omdb(omdb_data.get('Title', title), genres)
         if imdb_score:
             plot = omdb_data.get('Plot', '')
@@ -525,7 +515,7 @@ async def get_movie_info(title):
     logger.error(f"هیچ API برای {title} جواب نداد")
     if api_errors['tmdb'] > 5 or api_errors['omdb'] > 5:
         await send_admin_alert(None, f"⚠️ هشدار: APIهای متعدد ({api_errors}) خطا دارند. لطفاً کلیدهای TMDB و OMDb را بررسی کنید.")
-    return None
+    return random.choice(FALLBACK_MOVIES)
 
 async def generate_comment(genres):
     logger.info("تولید تحلیل...")
@@ -536,7 +526,7 @@ async def generate_comment(genres):
         try:
             async with asyncio.timeout(15):
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد."
+                prompt = "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد."
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -544,7 +534,7 @@ async def generate_comment(genres):
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Gemini با موفقیت دریافت شد")
-                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                 logger.warning(f"تحلیل Gemini نامعتبر: {text}")
         except google_exceptions.ResourceExhausted:
             logger.error("خطا: توکن Gemini تمام شده است")
@@ -569,9 +559,9 @@ async def generate_comment(genres):
                     "model": "mistral-saba-24b",
                     "messages": [
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                     ],
-                    "max_tokens": 500,  # افزایش به 500 توکن
+                    "max_tokens": 150,
                     "temperature": 0.7
                 }
                 response = await post_api_request(url, data, headers, retries=3)
@@ -582,7 +572,7 @@ async def generate_comment(genres):
                         if len(previous_comments) > 10:
                             previous_comments.pop(0)
                         logger.info("تحلیل Groq با موفقیت دریافت شد")
-                        return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                        return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                     logger.warning(f"تحلیل Groq نامعتبر: {text}")
                 else:
                     logger.warning(f"پاسخ Groq خالی یا نامعتبر: {response}")
@@ -604,9 +594,9 @@ async def generate_comment(genres):
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": "You are a professional film critic writing in Persian."},
-                        {"role": "user", "content": "یک تحلیل مفصل و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 تا 5 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. تحلیل باید عمیق و شامل نکات مثبت و منفی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
+                        {"role": "user", "content": "یک تحلیل کوتاه و جذاب به فارسی برای یک فیلم بنویس، بدون ذکر نام فیلم، در 3 جمله کامل (هر جمله با نقطه پایان یابد). لحن حرفه‌ای و سینمایی داشته باشد و متن متنوع و متفاوت از تحلیل‌های قبلی باشد. فقط به فارسی بنویس و از کلمات انگلیسی استفاده نکن."}
                     ],
-                    max_tokens=500,  # افزایش به 500 توکن
+                    max_tokens=150,
                     temperature=0.7
                 )
                 text = clean_text_for_validation(response.choices[0].message.content.strip())
@@ -615,12 +605,16 @@ async def generate_comment(genres):
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
                     logger.info("تحلیل Open AI با موفقیت دریافت شد")
-                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:5]) + '.'
+                    return '. '.join([s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟'][:3]) + '.'
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.error(f"خطای اتصال Open AI: {str(e)}")
+            api_availability['openai'] = False
+            await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}.")
         except Exception as e:
             logger.error(f"خطا در Open AI API: {str(e)}")
             api_availability['openai'] = False
-            # هشدار حذف شده است
+            await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}.")
 
     # 4. فال‌بک
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
@@ -656,17 +650,13 @@ async def fetch_movies_to_cache():
                     # 1. TMDB
                     logger.info(f"تلاش با TMDB برای کش، صفحه {page}")
                     tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=en-US&page={page}"
-                    tmdb_data = await cache_api_request(tmdb_url)
+                    tmdb_data = await make_api_request(tmdb_url)
                     if tmdb_data and tmdb_data.get('results'):
                         for m in tmdb_data['results']:
-                            details_url = f"https://api.themoviedb.org/3/movie/{m.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
-                            details_data = await cache_api_request(details_url)
-                            genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
                             if (m.get('title') and m.get('id') and
                                 m.get('original_language') != 'hi' and
                                 'IN' not in m.get('origin_country', []) and
-                                m.get('poster_path') and
-                                'مستند' not in genres):
+                                m.get('poster_path')):
                                 imdb_score = await get_imdb_score_tmdb(m['title'])
                                 if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
                                     new_movies.append({'title': m['title'], 'id': str(m['id'])})
@@ -675,15 +665,12 @@ async def fetch_movies_to_cache():
                     # 2. OMDb
                     logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
                     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&s=movie&type=movie&page={page}"
-                    omdb_data = await cache_api_request(omdb_url)
+                    omdb_data = await make_api_request(omdb_url)
                     if omdb_data and omdb_data.get('Search'):
                         for m in omdb_data['Search']:
-                            genres = m.get('Genre', '').split(', ')
-                            genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
-                            if 'مستند' not in genres:
-                                imdb_score = await get_imdb_score_omdb(m['Title'])
-                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
-                                    new_movies.append({'title': m['Title'], 'id': m['imdbID']})
+                            imdb_score = await get_imdb_score_omdb(m['Title'])
+                            if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                                new_movies.append({'title': m['Title'], 'id': m['imdbID']})
                         page += 1
                 
                 if new_movies:
@@ -700,10 +687,10 @@ async def fetch_movies_to_cache():
     logger.error("تلاش‌ها برای آپدیت کش ناموفق بود، لود از فایل")
     if await load_cache_from_file():
         return True
-    cached_movies = []
+    cached_movies = [{'title': m['title'], 'id': m['title']} for m in FALLBACK_MOVIES]
     await save_cache_to_file()
     last_fetch_time = datetime.now()
-    await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد، هیچ فیلمی در دسترس نیست")
+    await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد، استفاده از فال‌بک")
     return False
 
 async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
@@ -723,13 +710,15 @@ async def get_random_movie(max_retries=5):
                 await fetch_movies_to_cache()
             
             if not cached_movies:
-                logger.error("هیچ فیلمی در کش موجود نیست")
-                return None
+                logger.error("هیچ فیلمی در کش موجود نیست، استفاده از فال‌بک")
+                return random.choice(FALLBACK_MOVIES)
             
             available_movies = [m for m in cached_movies if m['id'] not in posted_movies]
             if not available_movies:
-                logger.warning("هیچ فیلم جدیدی در کش نیست")
-                return None
+                logger.warning("هیچ فیلم جدیدی در کش نیست، ریست لیست پست‌شده‌ها")
+                posted_movies.clear()
+                await save_posted_movies_to_file()
+                available_movies = cached_movies
             
             movie = random.choice(available_movies)
             logger.info(f"فیلم انتخاب شد: {movie['title']} (تلاش {attempt + 1})")
@@ -777,10 +766,10 @@ async def get_random_movie(max_retries=5):
         except Exception as e:
             logger.error(f"خطا در انتخاب فیلم (تلاش {attempt + 1}): {str(e)}")
             if attempt == max_retries - 1:
-                logger.error("تلاش‌ها تمام شد")
-                return None
-    logger.error("تلاش‌ها تمام شد")
-    return None
+                logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
+                return random.choice(FALLBACK_MOVIES)
+    logger.error("تلاش‌ها تمام شد، استفاده از فال‌بک")
+    return random.choice(FALLBACK_MOVIES)
 
 def format_movie_post(movie):
     stars = '⭐️' * movie['rating']
@@ -935,11 +924,11 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ ارسال پست کنسل شد: ربات غیرفعال است", reply_markup=get_main_menu())
             return
         
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(120):  # تایم‌اوت 2 دقیقه
             movie = await get_random_movie()
             if not movie:
                 logger.error("هیچ فیلمی انتخاب نشد")
-                await msg.edit_text("❌ خطا: هیچ فیلمی برای ارسال در دسترس نیست", reply_markup=get_main_menu())
+                await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
                 return
             
             await msg.edit_text(f"در حال آماده‌سازی پست برای {movie['title']} (تولید تحلیل)...")
@@ -973,13 +962,13 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تست TMDB
     tmdb_url = f"https://api.themoviedb.org/3/movie/popular?api_key={TMDB_API_KEY}&language=fa-IR&page=1"
     tmdb_data = await make_api_request(tmdb_url)
-    tmdb_status = "✅ TMDB اوکی" if tmdb_data and tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data or 'پاسخ نامعتبر'}"
+    tmdb_status = "✅ TMDB اوکی" if tmdb_data and tmdb_data.get('results') else f"❌ TMDB خطا: {tmdb_data}"
     results.append(tmdb_status)
 
     # تست OMDb
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t=Inception&type=movie"
     omdb_data = await make_api_request(omdb_url)
-    omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error') if omdb_data else 'پاسخ نامعتبر'}"
+    omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error')}"
     results.append(omdb_status)
 
     # تست JobQueue
@@ -987,61 +976,64 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
 
     # تست Gemini
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = "تست: یک جمله به فارسی بنویس."
-        response = await model.generate_content_async(prompt)
-        text = response.text.strip()
-        gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
-        results.append(gemini_status)
-    except Exception as e:
-        logger.error(f"خطا در تست Gemini: {str(e)}")
-        api_availability['gemini'] = False
-        results.append(f"❌ Gemini خطا: {str(e)}")
+    if api_availability['gemini']:
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = "تست: یک جمله به فارسی بنویس."
+            response = await model.generate_content_async(prompt)
+            text = response.text.strip()
+            gemini_status = "✅ Gemini اوکی" if text and is_farsi(text) else "❌ Gemini خطا: پاسخ نامعتبر"
+            results.append(gemini_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Gemini: {str(e)}")
+            api_availability['gemini'] = False
+            results.append(f"❌ Gemini خطا: {str(e)}")
 
     # تست Groq
-    try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "mistral-saba-24b",
-            "messages": [
-                {"role": "system", "content": "Write in Persian."},
-                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-            ],
-            "max_tokens": 50,
-            "temperature": 0.7
-        }
-        response = await post_api_request(url, data, headers, retries=3)
-        text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
-        groq_status = "✅ Groq اوکی" if text and is_farsi(text) else f"❌ Groq خطا: پاسخ نامعتبر - متن دریافتی: {text}"
-        results.append(groq_status)
-    except Exception as e:
-        logger.error(f"خطا در تست Groq: {str(e)}")
-        api_availability['groq'] = False
-        results.append(f"❌ Groq خطا: {str(e)}")
+    if api_availability['groq']:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "mistral-saba-24b",
+                "messages": [
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                "max_tokens": 50,
+                "temperature": 0.7
+            }
+            response = await post_api_request(url, data, headers, retries=3)
+            text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
+            groq_status = "✅ Groq اوکی" if text and is_farsi(text) else f"❌ Groq خطا: پاسخ نامعتبر - متن دریافتی: {text}"
+            results.append(groq_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Groq: {str(e)}")
+            api_availability['groq'] = False
+            results.append(f"❌ Groq خطا: {str(e)}")
 
     # تست Open AI
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Write in Persian."},
-                {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
-            ],
-            max_tokens=50,
-            temperature=0.7
-        )
-        text = response.choices[0].message.content.strip()
-        openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
-        results.append(openai_status)
-    except Exception as e:
-        logger.error(f"خطا در تست Open AI: {str(e)}")
-        api_availability['openai'] = False
-        results.append(f"❌ Open AI خطا: {str(e)}")
+    if api_availability['openai']:
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Write in Persian."},
+                    {"role": "user", "content": "تست: یک جمله به فارسی بنویس."}
+                ],
+                max_tokens=50,
+                temperature=0.7
+            )
+            text = response.choices[0].message.content.strip()
+            openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
+            results.append(openai_status)
+        except Exception as e:
+            logger.error(f"خطا در تست Open AI: {str(e)}")
+            api_availability['openai'] = False
+            results.append(f"❌ Open AI خطا: {str(e)}")
 
     return "\n".join(results)
 
@@ -1138,7 +1130,7 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
         movie = await get_random_movie()
         if not movie:
             logger.error("هیچ فیلمی انتخاب نشد")
-            await send_admin_alert(context, "❌ خطا: هیچ فیلمی برای پست خودکار در دسترس نیست")
+            await send_admin_alert(context, "❌ خطا: فیلم برای پست خودکار یافت نشد")
             return
         
         logger.info(f"فیلم انتخاب شد: {movie['title']}")
@@ -1220,7 +1212,7 @@ async def run_bot():
 
 async def main():
     logger.info("شروع برنامه...")
-    await init_openai_client()
+    await init_openai_client()  # مقداردهی Open AI client
     await load_cache_from_file()
     await load_posted_movies_from_file()
     if not await fetch_movies_to_cache():
