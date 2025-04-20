@@ -257,7 +257,7 @@ async def make_api_request(url, retries=5, timeout=15, headers=None):
             await asyncio.sleep(2 ** attempt)
     return None
 
-async def post_api_request(url, data, headers, retries=5, timeout=15):
+async def post_api_request(url, data, headers, retries=3, timeout=10):
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=timeout)) as session:
@@ -290,7 +290,7 @@ async def post_api_request(url, data, headers, retries=5, timeout=15):
             await asyncio.sleep(2 ** attempt)
     return None
 
-async def get_imdb_score_tmdb(title):
+async def get_imdb_score_tmdb(title, genres=None):
     logger.info(f"دریافت اطلاعات TMDB برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
@@ -301,13 +301,25 @@ async def get_imdb_score_tmdb(title):
         return None
     movie = data['results'][0]
     imdb_score = movie.get('vote_average', 0)
-    if imdb_score < 6.0:
-        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+    
+    # چک کردن ژانر انیمیشن
+    is_animation = False
+    if genres:
+        is_animation = 'انیمیشن' in genres
+    else:
+        details_url = f"https://api.themoviedb.org/3/movie/{movie.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
+        details_data = await make_api_request(details_url)
+        genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
+        is_animation = 'انیمیشن' in genres
+    
+    min_score = 8.0 if is_animation else 6.0
+    if imdb_score < min_score:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
         return None
     api_errors['tmdb'] = 0
     return f"{float(imdb_score):.1f}/10"
 
-async def get_imdb_score_omdb(title):
+async def get_imdb_score_omdb(title, genres=None):
     logger.info(f"دریافت اطلاعات OMDb برای: {title}")
     encoded_title = urllib.parse.quote(title)
     url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
@@ -317,8 +329,19 @@ async def get_imdb_score_omdb(title):
         api_errors['omdb'] += 1
         return None
     imdb_score = data.get('imdbRating', '0')
-    if float(imdb_score) < 6.0:
-        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد")
+    
+    # چک کردن ژانر انیمیشن
+    is_animation = False
+    if genres:
+        is_animation = 'انیمیشن' in genres
+    else:
+        genres = data.get('Genre', '').split(', ')
+        genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+        is_animation = 'انیمیشن' in genres
+    
+    min_score = 8.0 if is_animation else 6.0
+    if float(imdb_score) < min_score:
+        logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
         return None
     api_errors['omdb'] = 0
     return f"{float(imdb_score):.1f}/10"
@@ -418,7 +441,7 @@ async def get_movie_info(title):
                     trailer = f"https://www.youtube.com/watch?v={video['key']}"
                     break
         
-        imdb_score = await get_imdb_score_tmdb(tmdb_title)
+        imdb_score = await get_imdb_score_tmdb(tmdb_title, genres)
         if not imdb_score:
             logger.warning(f"امتیاز معتبر برای {tmdb_title} یافت نشد")
         else:
@@ -441,10 +464,10 @@ async def get_movie_info(title):
     omdb_url = f"http://www.omdbapi.com/?apikey={OMDB_API_KEY}&t={encoded_title}&type=movie"
     omdb_data = await make_api_request(omdb_url)
     if omdb_data and omdb_data.get('Response') == 'True':
-        imdb_score = omdb_data.get('imdbRating', '0')
-        if float(imdb_score) >= 6.0:
-            genres = omdb_data.get('Genre', '').split(', ')
-            genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+        genres = omdb_data.get('Genre', '').split(', ')
+        genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
+        imdb_score = await get_imdb_score_omdb(omdb_data.get('Title', title), genres)
+        if imdb_score:
             plot = omdb_data.get('Plot', '')
             plot = shorten_plot(plot) if plot and is_farsi(plot) else get_fallback_by_genre(FALLBACK_PLOTS, genres)
             previous_plots.append(plot)
@@ -454,7 +477,7 @@ async def get_movie_info(title):
                 'title': omdb_data.get('Title', title),
                 'year': omdb_data.get('Year', 'N/A'),
                 'plot': plot,
-                'imdb': f"{float(imdb_score):.1f}/10",
+                'imdb': imdb_score,
                 'trailer': None,
                 'poster': omdb_data.get('Poster', None),
                 'genres': genres[:3]
@@ -468,9 +491,10 @@ async def get_movie_info(title):
 async def generate_comment(genres):
     global gemini_available, deepseek_available, openai_available
     logger.info("تولید تحلیل...")
-    
+
     # 1. Gemini
     if gemini_available:
+        logger.info("تلاش با Gemini")
         max_attempts = 2
         for attempt in range(max_attempts):
             try:
@@ -483,20 +507,23 @@ async def generate_comment(genres):
                     previous_comments.append(text)
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
+                    logger.info("تحلیل Gemini با موفقیت دریافت شد")
                     return '. '.join(sentences[:3]) + '.'
                 logger.warning(f"تحلیل Gemini نامعتبر (تلاش {attempt + 1}): {text}")
             except google_exceptions.ResourceExhausted as e:
                 logger.error(f"خطا: توکن Gemini تمام شده است: {str(e)}")
                 gemini_available = False
-                await send_admin_alert(None, "❌ توکن Gemini تمام شده است. تلاش با DeepSeek...")
+                await send_admin_alert(None, "❌ توکن Gemini تمام شده است.")
             except google_exceptions.ClientError as e:
                 logger.error(f"خطای کلاینت Gemini (تلاش {attempt + 1}): {str(e)}")
             except Exception as e:
                 logger.error(f"خطا در Gemini API (تلاش {attempt + 1}): {str(e)}")
-    
+        logger.info("Gemini ناموفق بود، تلاش با DeepSeek...")
+
     # 2. DeepSeek
     if deepseek_available:
-        max_attempts = 7
+        logger.info("تلاش با DeepSeek")
+        max_attempts = 3
         for attempt in range(max_attempts):
             try:
                 url = "https://api.deepseek.com/v1/chat/completions"
@@ -513,7 +540,7 @@ async def generate_comment(genres):
                     "max_tokens": 150,
                     "temperature": 0.7
                 }
-                response = await post_api_request(url, data, headers)
+                response = await post_api_request(url, data, headers, retries=3, timeout=10)
                 if response and response.get('choices'):
                     text = response['choices'][0]['message']['content'].strip()
                     sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -521,6 +548,7 @@ async def generate_comment(genres):
                         previous_comments.append(text)
                         if len(previous_comments) > 10:
                             previous_comments.pop(0)
+                        logger.info("تحلیل DeepSeek با موفقیت دریافت شد")
                         return '. '.join(sentences[:3]) + '.'
                     logger.warning(f"تحلیل DeepSeek نامعتبر (تلاش {attempt + 1}): {text}")
                 else:
@@ -530,18 +558,20 @@ async def generate_comment(genres):
                 api_errors['deepseek'] += 1
                 if attempt == max_attempts - 1:
                     deepseek_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به DeepSeek: {str(e)}. تلاش با Open AI...")
+                    await send_admin_alert(None, f"❌ مشکل اتصال به DeepSeek: {str(e)}.")
             except Exception as e:
                 logger.error(f"خطا در DeepSeek API (تلاش {attempt + 1}): {str(e)}")
                 api_errors['deepseek'] += 1
                 if attempt == max_attempts - 1:
                     deepseek_available = False
-                    await send_admin_alert(None, f"❌ خطا در DeepSeek: {str(e)}. تلاش با Open AI...")
+                    await send_admin_alert(None, f"❌ خطا در DeepSeek: {str(e)}.")
             await asyncio.sleep(2 ** attempt)
-    
+        logger.info("DeepSeek ناموفق بود، تلاش با Open AI...")
+
     # 3. Open AI
     if openai_available:
-        max_attempts = 10
+        logger.info("تلاش با Open AI")
+        max_attempts = 3
         for attempt in range(max_attempts):
             try:
                 response = await client.chat.completions.create(
@@ -552,7 +582,7 @@ async def generate_comment(genres):
                     ],
                     max_tokens=150,
                     temperature=0.7,
-                    timeout=30
+                    timeout=10
                 )
                 text = response.choices[0].message.content.strip()
                 sentences = [s.strip() for s in text.split('. ') if s.strip() and s.strip()[-1] in '.!؟']
@@ -560,21 +590,23 @@ async def generate_comment(genres):
                     previous_comments.append(text)
                     if len(previous_comments) > 10:
                         previous_comments.pop(0)
+                    logger.info("تحلیل Open AI با موفقیت دریافت شد")
                     return '. '.join(sentences[:3]) + '.'
                 logger.warning(f"تحلیل Open AI نامعتبر: {text}")
             except aiohttp.client_exceptions.ClientConnectorError as e:
                 logger.error(f"خطای اتصال Open AI (تلاش {attempt + 1}): {str(e)}")
                 if attempt == max_attempts - 1:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد یا خیر. استفاده از فال‌بک.")
+                    await send_admin_alert(None, f"❌ مشکل اتصال به Open AI: {str(e)}. لطفاً بررسی کنید که سرور Render به API دسترسی دارد.")
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
                 logger.error(f"خطا در Open AI API (تلاش {attempt + 1}): {str(e)}")
                 if attempt == max_attempts - 1:
                     openai_available = False
-                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید. استفاده از فال‌بک.")
+                    await send_admin_alert(None, f"❌ خطا در Open AI: {str(e)}. لطفاً کلید OPENAI_API_KEY را بررسی کنید.")
                 await asyncio.sleep(2 ** attempt)
-    
+        logger.info("Open AI ناموفق بود، استفاده از فال‌بک...")
+
     # 4. فال‌بک
     logger.warning("هیچ تحلیلگری در دسترس نیست، استفاده از فال‌بک")
     comment = get_fallback_by_genre(FALLBACK_COMMENTS, genres)
@@ -684,6 +716,11 @@ async def get_random_movie(max_retries=5):
             movie_info = await get_movie_info(movie['title'])
             if not movie_info or movie_info['imdb'] == '0.0/10':
                 logger.warning(f"اطلاعات فیلم {movie['title']} نامعتبر، تلاش مجدد...")
+                continue
+            
+            # چک اضافی برای انیمیشن
+            if 'انیمیشن' in movie_info['genres'] and float(movie_info['imdb'].split('/')[0]) < 8.0:
+                logger.warning(f"فیلم {movie['title']} انیمیشن است اما امتیاز {movie_info['imdb']} دارد، رد شد")
                 continue
             
             posted_movies.append(movie['id'])
@@ -872,7 +909,7 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.info("دکمه post_now")
     await query.answer()
-    msg = await query.message.edit_text("در حال آماده‌سازی پست...")
+    msg = await query.message.edit_text("در حال آماده‌سازی پست (انتخاب فیلم)...")
     try:
         if not bot_enabled:
             logger.error("ارسال پست کنسل شد: ربات غیرفعال است")
@@ -884,6 +921,7 @@ async def post_now_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ خطا در یافتن فیلم", reply_markup=get_main_menu())
             return
         
+        await msg.edit_text(f"در حال آماده‌سازی پست برای {movie['title']} (تولید تحلیل)...")
         logger.info(f"ارسال پست برای: {movie['title']}")
         if movie['poster']:
             await context.bot.send_photo(
@@ -952,7 +990,7 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
             "max_tokens": 50,
             "temperature": 0.7
         }
-        response = await post_api_request(url, data, headers)
+        response = await post_api_request(url, data, headers, retries=3, timeout=10)
         text = response['choices'][0]['message']['content'].strip() if response and response.get('choices') else ""
         if text and is_farsi(text):
             deepseek_status = "✅ DeepSeek اوکی"
@@ -973,7 +1011,7 @@ async def run_tests(context: ContextTypes.DEFAULT_TYPE):
             ],
             max_tokens=50,
             temperature=0.7,
-            timeout=30
+            timeout=10
         )
         text = response.choices[0].message.content.strip()
         openai_status = "✅ Open AI اوکی" if text and is_farsi(text) else "❌ Open AI خطا: پاسخ نامعتبر"
