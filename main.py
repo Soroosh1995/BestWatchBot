@@ -222,19 +222,32 @@ async def get_imdb_id(tmdb_movie_id):
 
 # تابع برای گرفتن نمرات از RapidAPI
 async def get_ratings_from_rapidapi(imdb_id):
+    logger.info(f"درخواست به RapidAPI با IMDb ID: {imdb_id}")
+    if not imdb_id or not isinstance(imdb_id, str) or not imdb_id.startswith("tt"):
+        logger.error(f"IMDb ID نامعتبر: {imdb_id}")
+        return None
+    
     url = "https://movies-ratings2.p.rapidapi.com/ratings"
     headers = {
         "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY"),
         "X-RapidAPI-Host": "movies-ratings2.p.rapidapi.com"
     }
     querystring = {"imdb_id": imdb_id}
+    
     try:
         async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
             async with session.get(url, headers=headers, params=querystring) as response:
+                if response.status == 422:
+                    logger.error(f"خطای 422: درخواست RapidAPI نامعتبر. پاسخ: {await response.text()}")
+                    return None
+                if response.status == 401:
+                    logger.error("خطای 401: کلید RapidAPI نامعتبر")
+                    return None
                 if response.status != 200:
-                    logger.error(f"خطای RapidAPI: {response.status}")
+                    logger.error(f"خطای RapidAPI: کد {response.status}, پاسخ: {await response.text()}")
                     return None
                 data = await response.json()
+                logger.info(f"داده‌های RapidAPI دریافت شد: {data}")
                 return {
                     "imdb_rating": data.get("imdb_rating"),
                     "imdb_votes": data.get("imdb_votes"),
@@ -242,7 +255,7 @@ async def get_ratings_from_rapidapi(imdb_id):
                     "metacritic": data.get("metacritic_rating"),
                 }
     except Exception as e:
-        logger.error(f"خطا در RapidAPI: {str(e)}")
+        logger.error(f"خطا در درخواست RapidAPI: {str(e)}")
         return None
 
 async def translate_plot(plot, title):
@@ -825,18 +838,26 @@ async def fetch_movies_to_cache():
                     tmdb_data = await make_api_request(tmdb_url)
                     if tmdb_data and tmdb_data.get('results'):
                         for m in tmdb_data['results']:
-                            if (m.get('title') and m.get('id') and
-                                m.get('original_language') != 'hi' and
-                                'IN' not in m.get('origin_country', []) and
-                                m.get('poster_path')):
-                                details_url = f"https://api.themoviedb.org/3/movie/{m.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
-                                details_data = await make_api_request(details_url)
-                                genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
-                                if 'مستند' in genres:
-                                    continue
-                                imdb_score = await get_imdb_score_tmdb(m['title'])
-                                if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
-                                    new_movies.append({'title': m['title'], 'id': str(m['id'])})
+                            if not (m.get('title') and m.get('id') and m.get('poster_path')):
+                                logger.warning(f"فیلم TMDB بدون اطلاعات کافی: {m}")
+                                continue
+                            if m.get('original_language') == 'hi' or 'IN' in m.get('origin_country', []):
+                                logger.info(f"فیلم {m['title']} به دلیل زبان یا کشور رد شد")
+                                continue
+                            details_url = f"https://api.themoviedb.org/3/movie/{m.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
+                            details_data = await make_api_request(details_url)
+                            if not details_data:
+                                logger.warning(f"جزئیات TMDB برای {m['title']} دریافت نشد")
+                                continue
+                            genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
+                            if 'مستند' in genres:
+                                logger.info(f"فیلم {m['title']} مستند است، رد شد")
+                                continue
+                            imdb_score = await get_imdb_score_tmdb(m['title'])
+                            if imdb_score and float(imdb_score['imdb'].split('/')[0]) >= 6.0:
+                                new_movies.append({'title': m['title'], 'id': str(m['id'])})
+                            else:
+                                logger.info(f"فیلم {m['title']} امتیاز کافی ندارد")
                         page += 1
 
                     logger.info(f"تلاش با OMDb برای کش، صفحه {page}")
@@ -844,13 +865,19 @@ async def fetch_movies_to_cache():
                     omdb_data = await make_api_request(omdb_url)
                     if omdb_data and omdb_data.get('Search'):
                         for m in omdb_data['Search']:
+                            if not (m.get('Title') and m.get('imdbID')):
+                                logger.warning(f"فیلم OMDb بدون اطلاعات کافی: {m}")
+                                continue
                             genres = m.get('Genre', '').split(', ')
                             genres = [GENRE_TRANSLATIONS.get(g.strip(), 'سایر') for g in genres]
                             if 'مستند' in genres:
+                                logger.info(f"فیلم {m['Title']} مستند است، رد شد")
                                 continue
                             imdb_score = await get_imdb_score_omdb(m['Title'])
-                            if imdb_score and float(imdb_score.split('/')[0]) >= 6.0:
+                            if imdb_score and float(imdb_score['imdb'].split('/')[0]) >= 6.0:
                                 new_movies.append({'title': m['Title'], 'id': m['imdbID']})
+                            else:
+                                logger.info(f"فیلم {m['Title']} امتیاز کافی ندارد")
                         page += 1
                 
                 if new_movies:
@@ -861,7 +888,7 @@ async def fetch_movies_to_cache():
                     return True
                 logger.error("داده‌ای از هیچ API دریافت نشد")
         except Exception as e:
-            logger.error(f"خطا در آپدیت کش (تلاش {attempt + 1}): {str(e)}")
+            logger.error(f"خطا در آپدیت کش (تلاش {attempt + 1}): {str(e)}", exc_info=True)
             await asyncio.sleep(2 ** attempt)
     
     logger.error("تلاش‌ها برای آپدیت کش ناموفق بود، لود از فایل")
@@ -872,7 +899,6 @@ async def fetch_movies_to_cache():
     last_fetch_time = datetime.now()
     await send_admin_alert(None, "❌ خطا: کش فیلم‌ها آپدیت نشد")
     return False
-
 async def auto_fetch_movies(context: ContextTypes.DEFAULT_TYPE):
     logger.info("شروع آپدیت خودکار کش...")
     if await fetch_movies_to_cache():
@@ -1149,6 +1175,16 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     omdb_status = "✅ OMDb اوکی" if omdb_data and omdb_data.get('Response') == 'True' else f"❌ OMDb خطا: {omdb_data.get('Error')}"
     results.append(omdb_status)
 
+    # تست RapidAPI
+    try:
+        test_imdb_id = "tt0133093"  # Matrix
+        ratings = await get_ratings_from_rapidapi(test_imdb_id)
+        rapidapi_status = "✅ RapidAPI اوکی" if ratings and ratings.get("imdb_rating") else f"❌ RapidAPI خطا: {ratings}"
+        results.append(rapidapi_status)
+    except Exception as e:
+        logger.error(f"خطا در تست RapidAPI: {str(e)}")
+        results.append(f"❌ RapidAPI خطا: {str(e)}")
+
     # تست JobQueue
     job_queue = context.job_queue
     results.append("✅ JobQueue فعال" if job_queue else "❌ JobQueue غیرفعال")
@@ -1190,7 +1226,7 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطا در تست Groq: {str(e)}")
         api_availability['groq'] = False
         results.append(f"❌ Groq خطا: {str(e)}")
-
+        
     # تست Open AI
     try:
         response = await client.chat.completions.create(
