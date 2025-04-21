@@ -211,6 +211,40 @@ def shorten_comment(text):
         return shortened_text
     return None
 
+# تابع برای گرفتن IMDb ID از TMDB
+async def get_imdb_id(tmdb_movie_id):
+    url = f"https://api.themoviedb.org/3/movie/{tmdb_movie_id}/external_ids?api_key={TMDB_API_KEY}"
+    data = await make_api_request(url)
+    if data and data.get("imdb_id"):
+        return data["imdb_id"]  # مثلاً: tt1234567
+    logger.warning(f"هیچ IMDb ID برای TMDB ID {tmdb_movie_id} یافت نشد")
+    return None
+
+# تابع برای گرفتن نمرات از RapidAPI
+async def get_ratings_from_rapidapi(imdb_id):
+    url = "https://movies-ratings2.p.rapidapi.com/ratings"
+    headers = {
+        "X-RapidAPI-Key": os.getenv("RAPIDAPI_KEY"),
+        "X-RapidAPI-Host": "movies-ratings2.p.rapidapi.com"
+    }
+    querystring = {"imdb_id": imdb_id}
+    try:
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=15)) as session:
+            async with session.get(url, headers=headers, params=querystring) as response:
+                if response.status != 200:
+                    logger.error(f"خطای RapidAPI: {response.status}")
+                    return None
+                data = await response.json()
+                return {
+                    "imdb_rating": data.get("imdb_rating"),
+                    "imdb_votes": data.get("imdb_votes"),
+                    "rotten_tomatoes": data.get("rotten_tomatoes_rating"),
+                    "metacritic": data.get("metacritic_rating"),
+                }
+    except Exception as e:
+        logger.error(f"خطا در RapidAPI: {str(e)}")
+        return None
+
 async def translate_plot(plot, title):
     logger.info(f"تلاش برای ترجمه خلاصه داستان برای {title}")
     
@@ -348,24 +382,53 @@ async def get_imdb_score_tmdb(title, genres=None):
         logger.warning(f"TMDB هیچ نتیجه‌ای برای {title} نداد")
         api_errors['tmdb'] += 1
         return None
-    movie = data['results'][0]
-    imdb_score = movie.get('vote_average', 0)
     
+    movie = data['results'][0]
+    tmdb_movie_id = movie.get('id')
+    
+    # گرفتن IMDb ID
+    imdb_id = await get_imdb_id(tmdb_movie_id)
+    
+    # بررسی ژانرها
     is_animation = False
     if genres:
         is_animation = 'انیمیشن' in genres
     else:
-        details_url = f"https://api.themoviedb.org/3/movie/{movie.get('id')}?api_key={TMDB_API_KEY}&language=en-US"
+        details_url = f"https://api.themoviedb.org/3/movie/{tmdb_movie_id}?api_key={TMDB_API_KEY}&language=en-US"
         details_data = await make_api_request(details_url)
         genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in details_data.get('genres', [])]
         is_animation = 'انیمیشن' in genres
     
     min_score = 8.0 if is_animation else 6.0
+    
+    # 1. RapidAPI
+    if imdb_id:
+        ratings = await get_ratings_from_rapidapi(imdb_id)
+        if ratings and ratings.get("imdb_rating"):
+            imdb_score = float(ratings["imdb_rating"])
+            if imdb_score < min_score:
+                logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
+                return None
+            api_errors['tmdb'] = 0
+            return {
+                "imdb": f"{imdb_score:.1f}/10",
+                "imdb_votes": ratings.get("imdb_votes"),
+                "rotten_tomatoes": ratings.get("rotten_tomatoes"),
+                "metacritic": ratings.get("metacritic")
+            }
+    
+    # 2. TMDB (فال‌بک)
+    imdb_score = movie.get('vote_average', 0)
     if imdb_score < min_score:
         logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
         return None
     api_errors['tmdb'] = 0
-    return f"{float(imdb_score):.1f}/10"
+    return {
+        "imdb": f"{float(imdb_score):.1f}/10",
+        "imdb_votes": movie.get("vote_count"),
+        "rotten_tomatoes": None,
+        "metacritic": None
+    }
 
 async def get_imdb_score_omdb(title, genres=None):
     logger.info(f"دریافت اطلاعات OMDb برای: {title}")
@@ -376,7 +439,6 @@ async def get_imdb_score_omdb(title, genres=None):
         logger.warning(f"OMDb هیچ نتیجه‌ای برای {title} نداد: {data.get('Error')}")
         api_errors['omdb'] += 1
         return None
-    imdb_score = data.get('imdbRating', '0')
     
     is_animation = False
     if genres:
@@ -387,12 +449,19 @@ async def get_imdb_score_omdb(title, genres=None):
         is_animation = 'انیمیشن' in genres
     
     min_score = 8.0 if is_animation else 6.0
+    imdb_score = data.get('imdbRating', '0')
+    
     if float(imdb_score) < min_score:
         logger.warning(f"فیلم {title} امتیاز {imdb_score} دارد، رد شد (حداقل {min_score} لازم است)")
         return None
     api_errors['omdb'] = 0
-    return f"{float(imdb_score):.1f}/10"
-
+    return {
+        "imdb": f"{float(imdb_score):.1f}/10",
+        "imdb_votes": data.get("imdbVotes"),
+        "rotten_tomatoes": None,
+        "metacritic": None
+    }
+    
 async def check_poster(url):
     try:
         async with aiohttp.ClientSession(timeout=ClientTimeout(total=5)) as session:
@@ -526,15 +595,11 @@ async def get_movie_info(title):
             'title': tmdb_title,
             'year': tmdb_year,
             'plot': plot,
-            'imdb': imdb_score,
+            'imdb': imdb_score,  # حالا شامل تمام نمرات
             'trailer': trailer,
             'poster': tmdb_poster,
             'genres': genres[:3]
         }
-    
-    if tmdb_data_en and tmdb_data_en.get('results'):
-        logger.info(f"فیلم {title} توسط TMDB رد شد، بررسی OMDb انجام نمی‌شود")
-        return None
     
     # 2. OMDb
     logger.info(f"تلاش با OMDb برای {title}")
@@ -838,12 +903,12 @@ async def get_random_movie(max_retries=5):
             movie = random.choice(available_movies)
             logger.info(f"فیلم انتخاب شد: {movie['title']} (تلاش {attempt + 1})")
             movie_info = await get_movie_info(movie['title'])
-            if not movie_info or movie_info['imdb'] == '0.0/10':
+            if not movie_info or movie_info['imdb']['imdb'] == '0.0/10':
                 logger.warning(f"اطلاعات فیلم {movie['title']} نامعتبر، تلاش مجدد...")
                 continue
             
-            if 'انیمیشن' in movie_info['genres'] and float(movie_info['imdb'].split('/')[0]) < 8.0:
-                logger.warning(f"فیلم {movie['title']} انیمیشن است اما امتیاز {movie_info['imdb']} دارد، رد شد")
+            if 'انیمیشن' in movie_info['genres'] and float(movie_info['imdb']['imdb'].split('/')[0]) < 8.0:
+                logger.warning(f"فیلم {movie['title']} انیمیشن است اما امتیاز {movie_info['imdb']['imdb']} دارد، رد شد")
                 continue
             
             posted_movies.append(movie['id'])
@@ -854,7 +919,7 @@ async def get_random_movie(max_retries=5):
                 logger.error("تحلیل تولید نشد")
                 continue
             
-            imdb_score = float(movie_info['imdb'].split('/')[0])
+            imdb_score = float(movie_info['imdb']['imdb'].split('/')[0])
             logger.info(f"امتیاز برای {movie['title']}: {imdb_score}")
             if imdb_score >= 8.5:
                 rating = 5
@@ -900,9 +965,16 @@ def format_movie_post(movie):
 <b>{clean_text(movie['title']) or 'بدون عنوان'}{special}</b>{trailer_part}
 
 {genres}
-📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']) or 'نامشخص'}</b>
+📅 <b>سال تولید: {clean_text(movie['year']) or 'نامشخص'}</b> | <b>امتیاز IMDB: {clean_text(movie['imdb']['imdb']) or 'نامشخص'}</b>
 """
     ]
+    
+    if movie['imdb'].get('imdb_votes'):
+        post_sections.append(f"🗳 <b>تعداد رای: {movie['imdb']['imdb_votes']}</b>\n")
+    if movie['imdb'].get('rotten_tomatoes'):
+        post_sections.append(f"🍅 <b>Rotten Tomatoes: {movie['imdb']['rotten_tomatoes']}</b>\n")
+    if movie['imdb'].get('metacritic'):
+        post_sections.append(f"📊 <b>Metacritic: {movie['imdb']['metacritic']}</b>\n")
     
     if movie['plot'] and clean_text(movie['plot']) != 'متن موجود نیست':
         post_sections.append(f"""
