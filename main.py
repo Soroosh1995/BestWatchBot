@@ -1260,10 +1260,14 @@ async def auto_post(context: ContextTypes.DEFAULT_TYPE):
 async def health_check(request):
     return web.Response(text="OK")
 
+async def root_handler(request):
+    raise web.HTTPFound(location="https://t.me/bestwatch_channel")  # ریدایرکت به کانال
+
 async def run_web():
     logger.info(f"راه‌اندازی سرور وب روی پورت {PORT}...")
     app = web.Application()
     app.router.add_get('/health', health_check)
+    app.router.add_get('/', root_handler)  # مسیر ریشه با ریدایرکت
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
