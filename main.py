@@ -299,7 +299,7 @@ async def translate_plot(plot, title):
         logger.info("تلاش با Gemini برای ترجمه")
         try:
             async with asyncio.timeout(15):
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 prompt = f"خلاصه داستان فیلم را از انگلیسی به فارسی ترجمه کن. ترجمه باید دقیق و مناسب برای خلاصه فیلم باشد. فقط از فارسی استفاده کن: {plot}"
                 response = await model.generate_content_async(prompt)
                 translated_plot = clean_text_for_validation(response.text.strip())
@@ -688,7 +688,7 @@ async def generate_comment(genres):
         logger.info("تلاش با Gemini")
         try:
             async with asyncio.timeout(15):
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 response = await model.generate_content_async(prompt)
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -1191,7 +1191,7 @@ async def run_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # تست Gemini
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         prompt = "تست: یک جمله به فارسی بنویس."
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
