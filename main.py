@@ -416,13 +416,15 @@ async def load_posted_movies_from_file():
         return False
 
 async def get_movie_info(title, tmdb_movie_id=None):
-    logger.info(f"دریافت اطلاعات برای فیلم: {title}")
+    """
+    این تابع اطلاعات اولیه فیلم (عنوان، سال، پوستر، ژانر، خلاصه داستان، IMDb ID) را از TMDB دریافت می‌کند.
+    نمرات دقیق RapidAPI در این مرحله دریافت نمی‌شوند، بلکه در fetch_movies_to_cache یا get_random_movie مدیریت می‌شوند.
+    """
+    logger.info(f"دریافت اطلاعات اولیه برای فیلم: {title}")
     
     movie_info = {}
-    imdb_id = None
-
+    
     # 1. TMDB - دریافت اطلاعات اولیه و IMDb ID
-    logger.info(f"تلاش با TMDB برای {title}")
     encoded_title = urllib.parse.quote(title)
     
     movie = None
@@ -447,8 +449,7 @@ async def get_movie_info(title, tmdb_movie_id=None):
     movie_info['poster'] = f"https://image.tmdb.org/t/p/w500{movie.get('poster_path')}" if movie.get('poster_path') else None
 
     # گرفتن IMDb ID از TMDB
-    imdb_id = await get_imdb_id_from_tmdb(tmdb_movie_id)
-    movie_info['imdb_id'] = imdb_id # ذخیره IMDb ID
+    movie_info['imdb_id'] = await get_imdb_id_from_tmdb(tmdb_movie_id)
     movie_info['tmdb_id'] = tmdb_movie_id # برای استفاده در کش
 
     genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in movie.get('genres', [])]
@@ -509,8 +510,8 @@ async def get_movie_info(title, tmdb_movie_id=None):
     
     return movie_info
 
-async def generate_comment(genres):
-    logger.info("تولید تحلیل...")
+async def generate_comment(genres, imdb_score_val):
+    logger.info(f"تولید تحلیل برای امتیاز: {imdb_score_val}")
     logger.info(f"وضعیت APIها: Gemini={api_availability['gemini']}")
 
     # انتخاب ژانر برای فال‌بک
@@ -523,19 +524,28 @@ async def generate_comment(genres):
         selected_genre = 'سایر'
     logger.info(f"ژانر انتخاب‌شده برای تحلیل/فال‌بک: {selected_genre}")
 
-    # پرامپت جدید و بهبود یافته برای تنوع بیشتر
-    prompt = """یک تحلیل به زبان فارسی درباره فیلم بنویس. تحلیل باید به جنبه‌های مختلف فیلم (مانند کارگردانی، بازیگری، داستان، جلوه‌های بصری، موسیقی) اشاره کند و نقاط قوت و ضعف احتمالی آن را نیز در نظر بگیرد و به معرفی فیلم بپردازد. از زبان ساده و روان استفاده کن. متن بین 50 تا 120 کلمه و شامل 4 تا 6 جمله کوتاه و کامل باشد و جمله آخر، یک جمع‌بندی کلی و واقع‌بینانه از تجربه تماشای فیلم ارائه دهد. مهم است که هر تحلیل، ساختار جملات، انتخاب واژگان و زاویه دید متفاوتی نسبت به تحلیل‌های قبلی داشته باشد تا از تکراری شدن جلوگیری شود. از ذکر نام فیلم یا بازیگر و تشبیهات بسیار اغراق‌آمیز خودداری کن."""
+    # پرامپت‌های شرطی بر اساس امتیاز فیلم
+    if imdb_score_val >= 8.5:
+        prompt = """یک تحلیل بسیار تحسین‌آمیز و پرانرژی درباره فیلم بنویس. بر نقاط قوت بی‌نظیر فیلم (مانند کارگردانی خلاقانه، بازی‌های درخشان، داستان‌گویی عمیق، جلوه‌های بصری خیره‌کننده، موسیقی مسحورکننده) تمرکز کن. هیچ نقطه ضعفی ذکر نکن. متن بین 60 تا 100 کلمه باشد. جمله آخر باید یک توصیه قاطع برای تماشا باشد که بر تجربه فراموش‌نشدنی تأکید کند. از زبان ساده و روان استفاده کن. مهم است که هر تحلیل، ساختار جملات، انتخاب واژگان و زاویه دید متفاوتی نسبت به تحلیل‌های قبلی داشته باشد تا از تکراری شدن جلوگیری شود. از ذکر نام فیلم یا بازیگر و تشبیهات بسیار اغراق‌آمیز خودداری کن."""
+    elif 7.0 <= imdb_score_val < 8.5:
+        prompt = """یک تحلیل متعادل و واقع‌بینانه درباره فیلم بنویس. به نقاط قوت (مانند کارگردانی مناسب، بازی‌های قابل قبول، داستانی جذاب) و همچنین یک یا دو نکته که می‌توانست بهتر باشد (مثلاً ریتم کند، پایان قابل پیش‌بینی، شخصیت‌پردازی سطحی) اشاره کن. متن بین 50 تا 80 کلمه باشد. جمله آخر باید یک جمع‌بندی منطقی و بدون اغراق باشد که ارزش دیدن را به طور ملایم توصیه کند. از زبان ساده و روان استفاده کن. مهم است که هر تحلیل، ساختار جملات، انتخاب واژگان و زاویه دید متفاوتی نسبت به تحلیل‌های قبلی داشته باشد تا از تکراری شدن جلوگیری شود. از ذکر نام فیلم یا بازیگر خودداری کن."""
+    else: # امتیاز کمتر از 7.0 (مثلاً 6.0 تا 6.9)
+        prompt = """یک تحلیل صریح و منصفانه درباره فیلم بنویس. بر نقاط ضعف اصلی فیلم (مانند داستان کلیشه‌ای، کارگردانی ضعیف، بازی‌های غیرطبیعی، نقص‌های فنی) تمرکز کن، اما به نکات مثبت کوچک نیز اشاره کن (مثلاً یک ایده اولیه خوب یا یک صحنه خاص). متن بین 50 تا 80 کلمه باشد. جمله آخر باید یک جمع‌بندی واقع‌بینانه باشد که به مخاطب هشدار دهد یا فقط به گروه‌های خاصی توصیه کند. مهم است که هر تحلیل، ساختار جملات، انتخاب واژگان و زاویه دید متفاوتی نسبت به تحلیل‌های قبلی داشته باشد تا از تکراری شدن جلوگیری شود. از زبان ساده و روان استفاده کن. از ذکر نام فیلم یا بازیگر خودداری کن."""
+
 
     # 1. Gemini
     if api_availability['gemini'] and GOOGLE_API_KEY:
         logger.info("تلاش با Gemini")
         try:
-            async with asyncio.timeout(20): # افزایش تایم‌اوت
+            async with asyncio.timeout(25): # افزایش تایم‌اوت بیشتر
                 # مدل به gemini-1.5-flash تغییر یافت. اگر 2.5-flash در دسترس شماست، می‌توانید در اینجا تغییر دهید.
                 model = genai.GenerativeModel('gemini-1.5-flash') 
                 response = await model.generate_content_async(
                     prompt,
-                    generation_config=genai.types.GenerationConfig(max_output_tokens=250) # افزایش max_tokens
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=250, # افزایش max_tokens
+                        temperature=0.8 # تنظیم دما
+                    ) 
                 )
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
@@ -743,6 +753,7 @@ async def get_random_movie(max_retries=5):
             
             # دریافت اطلاعات کامل فیلم (شامل خلاصه داستان و... که در مرحله کش کامل نشده)
             # و همچنین بروزرسانی امتیازات اگر از RapidAPI در کش موجود نبود
+            # در اینجا movie_info اطلاعات اولیه را برمی‌گرداند، نه اطلاعات کامل کش شده از RapidAPI
             movie_info = await get_movie_info(movie_to_process['title'], movie_to_process.get('tmdb_id'))
             
             if not movie_info:
@@ -755,11 +766,16 @@ async def get_random_movie(max_retries=5):
 
             # استفاده از اطلاعات امتیاز از movie_to_process که از کش آمده
             # این شامل نمرات RapidAPI است اگر در مرحله کش گرفته شده باشد
-            movie_info['imdb'] = movie_to_process['imdb']
-            if movie_info['imdb'].get('imdb'):
-                imdb_score_val = float(movie_info['imdb']['imdb'].split('/')[0])
-            logger.info(f"نمرات از کش (RapidAPI/TMDB) برای {movie_info['title']} استفاده شد: {movie_info['imdb'].get('imdb', 'N/A')}")
+            movie_info['imdb'] = movie_to_process['imdb'] # اطمینان از انتقال اطلاعات کامل امتیاز از کش به movie_info
             
+            if movie_info['imdb'].get('imdb'):
+                try:
+                    # حذف " /10" از امتیاز IMDb و تبدیل به float
+                    imdb_score_val = float(movie_info['imdb']['imdb'].split('/')[0])
+                except ValueError:
+                    logger.warning(f"فرمت امتیاز IMDb برای {movie_info['title']} نامعتبر است: {movie_info['imdb']['imdb']}. استفاده از 0.0.")
+                    imdb_score_val = 0.0
+
             if imdb_score_val < min_score:
                 logger.warning(f"فیلم {movie_to_process['title']} امتیاز {imdb_score_val} دارد، رد شد (حداقل {min_score} لازم است)")
                 continue
@@ -773,7 +789,8 @@ async def get_random_movie(max_retries=5):
                 logger.warning(f"IMDb ID برای فیلم {movie_info['title']} یافت نشد، نمی‌توان به لیست پست‌شده‌ها اضافه کرد.")
                 continue
 
-            comment = await generate_comment(movie_info['genres'])
+            # ارسال امتیاز فیلم به generate_comment
+            comment = await generate_comment(movie_info['genres'], imdb_score_val)
             if not comment:
                 logger.error("تحلیل تولید نشد")
                 continue
@@ -793,6 +810,9 @@ async def get_random_movie(max_retries=5):
                 if not await check_poster(movie_info['poster']):
                     movie_info['poster'] = None
             
+            # انتقال تریلر از movie_to_process به movie_info
+            movie_info['trailer'] = movie_to_process.get('trailer') # <-- این خط اضافه شد
+
             return {
                 **movie_info,
                 'comment': comment,
@@ -870,9 +890,6 @@ def get_main_menu():
         [
             InlineKeyboardButton("تست‌ها", callback_data='tests_menu'),
             InlineKeyboardButton("ریست Webhook", callback_data='reset_webhook')
-        ],
-        [
-            InlineKeyboardButton(toggle_text, callback_data='toggle_bot')
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
