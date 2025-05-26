@@ -13,7 +13,6 @@ from aiohttp import web, ClientTimeout
 import urllib.parse
 from datetime import datetime, timedelta
 from google.api_core import exceptions as google_exceptions
-# from openai import AsyncOpenAI # حذف شد
 import aiohttp.client_exceptions
 import re
 import certifi
@@ -31,10 +30,8 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 ADMIN_ID = os.getenv('ADMIN_ID')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-# GROQ_API_KEY = os.getenv('GROQ_API_KEY') # حذف شد
-# OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') # حذف شد
 OMDB_API_KEY = os.getenv('OMDB_API_KEY')
-RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY') # اضافه شد
+RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY')
 PORT = int(os.getenv('PORT', 8080))
 POST_INTERVAL = int(os.getenv('POST_INTERVAL', 14400)) # 4 hours in seconds
 FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 86400)) # 24 hours in seconds
@@ -42,17 +39,9 @@ FETCH_INTERVAL = int(os.getenv('FETCH_INTERVAL', 86400)) # 24 hours in seconds
 # تنظیم Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# تنظیم Open AI (حذف شد)
-# client = None
-# async def init_openai_client():
-#     global client
-#     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
 # وضعیت دسترسی APIها
 api_availability = {
     'gemini': True,
-    # 'groq': True, # حذف شد
-    # 'openai': True # حذف شد
 }
 
 # کش و متغیرهای سراسری
@@ -120,7 +109,7 @@ FALLBACK_COMMENTS = {
     ],
     'هیجان_انگیز': [
         'داستان پر از تعلیقه و حسابی نفس‌گیره، ولی گاهی قابل پیش‌بینیه. شخصیت‌پردازی خوبه، اما پایانش ساده‌ست. کارگردانی قویه و موسیقی حس تعلیق رو بالا می‌بره. این فیلم ذهنت رو درگیر می‌کنه.',
-        'فیلم پر از پیچش‌های داستانیه، ولی ریتمش گاهی افت می‌کنه. شخصیت‌ها متوسطه، اما کارگردانی هیجان‌انگیزه. موسیقی متن به فضا جون می‌ده. حس و حالش تو رو کنجکاو نگه می‌داره.',
+        'فیلم پر از پیچش‌های داستانیه، ولی ریتمش گاهی افت می‌کنه. شخصیت‌ها متوسطه، اما کارگردانی هیجان‌انگیزه. موسیقی متن به فضا جون می‌ده. حس و حالش تو رو کنجاو نگه می‌داره.',
         'داستان هیجان‌انگیز جذابه، ولی گاهی زیاده‌روی می‌کنه. شخصیت‌پردازی ساده‌ست، اما کارگردانی قویه. موسیقی متن حس تعلیق رو خوب منتقل می‌کنه. این فیلم یه تجربه پرهیجان و تأمل‌برانگیزه.',
         'فیلم با تعلیق قوی شروع می‌شه، ولی پایانش یه کم گنگه. شخصیت‌ها قابل قبوله، اما موسیقی می‌تونست بهتر باشه. کارگردانی جذابه. تجربه‌ایه که تو رو به فکر وا می‌داره.',
         'داستان پر از هیجانه، ولی منطقش گاهی لنگ می‌زنه. شخصیت‌پردازی متوسطه، اما کارگردانی و موسیقی قوین. جلوه‌های بصری خوبن. این فیلم یه حس کنجکاوی و هیجان بهت می‌ده.'
@@ -226,6 +215,9 @@ async def get_ratings_from_rapidapi(imdb_id):
     if not imdb_id or not isinstance(imdb_id, str) or not imdb_id.startswith("tt"):
         logger.error(f"IMDb ID نامعتبر برای RapidAPI: {imdb_id}")
         return None
+    if not RAPIDAPI_KEY:
+        logger.error("RAPIDAPI_KEY تنظیم نشده است.")
+        return None
     
     url = "https://movies-ratings2.p.rapidapi.com/ratings"
     headers = {
@@ -272,7 +264,10 @@ async def translate_plot(plot, title):
                 # تغییر مدل به gemini-1.5-flash
                 model = genai.GenerativeModel('gemini-1.5-flash') 
                 prompt = f"خلاصه داستان فیلم را از انگلیسی به فارسی ترجمه کن. ترجمه باید دقیق و مناسب برای خلاصه فیلم باشد. فقط از فارسی استفاده کن: {plot}"
-                response = await model.generate_content_async(prompt)
+                response = await model.generate_content_async(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(max_output_tokens=300) # افزایش max_tokens برای ترجمه
+                )
                 translated_plot = clean_text_for_validation(response.text.strip())
                 if is_valid_plot(translated_plot) and is_farsi(translated_plot):
                     logger.info(f"ترجمه Gemini موفق برای {title}: {translated_plot[:100]}...")
@@ -430,13 +425,13 @@ async def get_movie_info(title, tmdb_movie_id=None):
     logger.info(f"تلاش با TMDB برای {title}")
     encoded_title = urllib.parse.quote(title)
     
+    movie = None
     if tmdb_movie_id: # اگر TMDB ID از قبل داشتیم
         details_url_en = f"https://api.themoviedb.org/3/movie/{tmdb_movie_id}?api_key={TMDB_API_KEY}&language=en-US"
-        details_data_en = await make_api_request(details_url_en)
-        if not details_data_en:
+        movie = await make_api_request(details_url_en)
+        if not movie:
             logger.warning(f"جزئیات TMDB برای TMDB ID {tmdb_movie_id} دریافت نشد")
             return None
-        movie = details_data_en
     else: # اگر TMDB ID نداشتیم، جستجو می‌کنیم
         search_url_en = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={encoded_title}&language=en-US"
         tmdb_data_en = await make_api_request(search_url_en)
@@ -454,6 +449,7 @@ async def get_movie_info(title, tmdb_movie_id=None):
     # گرفتن IMDb ID از TMDB
     imdb_id = await get_imdb_id_from_tmdb(tmdb_movie_id)
     movie_info['imdb_id'] = imdb_id # ذخیره IMDb ID
+    movie_info['tmdb_id'] = tmdb_movie_id # برای استفاده در کش
 
     genres = [GENRE_TRANSLATIONS.get(g['name'], 'سایر') for g in movie.get('genres', [])]
     if not genres and tmdb_movie_id: # اگر ژانرها در جستجو نبود، از جزئیات بیشتر بگیر
@@ -491,7 +487,7 @@ async def get_movie_info(title, tmdb_movie_id=None):
             return None
 
     # در این مرحله، نمرات دقیق از RapidAPI گرفته نمی‌شوند.
-    # فقط ساختار imdb را با مقادیر TMDB آماده می‌کنیم.
+    # فقط ساختار imdb را با مقادیر اولیه TMDB آماده می‌کنیم.
     movie_info['imdb'] = {
         "imdb": f"{float(movie.get('vote_average', 0)):.1f}/10" if movie.get('vote_average') else None,
         "imdb_votes": movie.get('vote_count'),
@@ -535,15 +531,16 @@ async def generate_comment(genres):
         logger.info("تلاش با Gemini")
         try:
             async with asyncio.timeout(20): # افزایش تایم‌اوت
-                # تغییر مدل به gemini-1.5-flash
-                # اگر gemini-2.5-flash در دسترس شماست، می‌توانید در اینجا تغییر دهید.
+                # مدل به gemini-1.5-flash تغییر یافت. اگر 2.5-flash در دسترس شماست، می‌توانید در اینجا تغییر دهید.
                 model = genai.GenerativeModel('gemini-1.5-flash') 
-                response = await model.generate_content_async(prompt)
+                response = await model.generate_content_async(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(max_output_tokens=250) # افزایش max_tokens
+                )
                 text = clean_text_for_validation(response.text.strip())
                 if is_valid_comment(text):
                     previous_comments.append(text)
-                    # تغییر: افزایش اندازه previous_comments
-                    if len(previous_comments) > 30:
+                    if len(previous_comments) > 30: # افزایش اندازه previous_comments
                         previous_comments.pop(0)
                     logger.info("تحلیل Gemini با موفقیت دریافت شد")
                     return text.rstrip('.')
@@ -598,6 +595,10 @@ async def fetch_movies_to_cache():
     logger.info("شروع آپدیت کش فیلم‌ها...")
     new_movies_temp = []
     
+    # محدودیت تعداد درخواست RapidAPI در مرحله کش
+    rapidapi_calls_made_this_fetch = 0
+    MAX_RAPIDAPI_CALLS_PER_FETCH = 8 # مثلا 8 درخواست در هر بار فچ (از 10 محدودیت روزانه)
+
     for attempt in range(3):
         try:
             async with aiohttp.ClientSession(timeout=ClientTimeout(total=30)) as session:
@@ -616,7 +617,6 @@ async def fetch_movies_to_cache():
                                 logger.info(f"فیلم {m['title']} به دلیل زبان یا کشور رد شد")
                                 continue
                             
-                            # دریافت IMDb ID از TMDB برای هر فیلم
                             imdb_id = await get_imdb_id_from_tmdb(m.get('id'))
                             if not imdb_id:
                                 logger.warning(f"IMDb ID برای فیلم TMDB {m['title']} یافت نشد، رد شد.")
@@ -633,8 +633,51 @@ async def fetch_movies_to_cache():
                                 logger.info(f"فیلم {m['title']} مستند است، رد شد")
                                 continue
                             
-                            # فقط اطلاعات اصلی و IMDb ID را ذخیره می‌کنیم
-                            new_movies_temp.append({'title': m['title'], 'id': imdb_id, 'tmdb_id': m['id']})
+                            # اضافه کردن لینک تریلر
+                            trailer = None
+                            videos_url = f"https://api.themoviedb.org/3/movie/{m.get('id')}/videos?api_key={TMDB_API_KEY}&language=en"
+                            videos_data = await make_api_request(videos_url)
+                            if videos_data and videos_data.get('results'):
+                                for video in videos_data['results']:
+                                    if video['type'] == 'Trailer' and video['site'] == 'YouTube':
+                                        trailer = f"https://www.youtube.com/watch?v={video['key']}"
+                                        break
+
+                            movie_cache_entry = {
+                                'title': m['title'],
+                                'id': imdb_id, # IMDb ID به عنوان ID اصلی
+                                'tmdb_id': m['id'], # TMDB ID برای دسترسی مجدد به اطلاعات بیشتر TMDB
+                                'year': m.get('release_date', 'N/A')[:4],
+                                'poster': f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}" if m.get('poster_path') else None,
+                                'trailer': trailer, # <-- این خط اضافه شد
+                                'genres': genres[:3],
+                                'plot': None, # خلاصه داستان در get_movie_info کامل می‌شود
+                                'imdb': { # اطلاعات امتیاز اولیه از TMDB
+                                    "imdb": f"{float(m.get('vote_average', 0)):.1f}/10" if m.get('vote_average') else None,
+                                    "imdb_votes": m.get('vote_count'),
+                                    "rotten_tomatoes": None,
+                                    "metacritic": None,
+                                }
+                            }
+
+                            # تلاش برای دریافت نمرات دقیق RapidAPI در مرحله کش
+                            if rapidapi_calls_made_this_fetch < MAX_RAPIDAPI_CALLS_PER_FETCH:
+                                rapidapi_ratings = await get_ratings_from_rapidapi(imdb_id)
+                                if rapidapi_ratings:
+                                    movie_cache_entry['imdb'].update({
+                                        "imdb": rapidapi_ratings.get("imdb_rating") or movie_cache_entry['imdb']['imdb'],
+                                        "imdb_votes": rapidapi_ratings.get("imdb_votes") or movie_cache_entry['imdb']['imdb_votes'],
+                                        "rotten_tomatoes": rapidapi_ratings.get("rotten_tomatoes"),
+                                        "metacritic": rapidapi_ratings.get("metacritic"),
+                                    })
+                                    rapidapi_calls_made_this_fetch += 1
+                                    logger.info(f"نمرات RapidAPI برای {m['title']} در کش ذخیره شد. تعداد درخواست: {rapidapi_calls_made_this_fetch}")
+                                else:
+                                    logger.warning(f"RapidAPI نمرات دقیق برای {m['title']} را نداد. استفاده از TMDB/OMDB.")
+                            else:
+                                logger.info(f"محدودیت درخواست RapidAPI در fetch_movies_to_cache به {MAX_RAPIDAPI_CALLS_PER_FETCH} رسید. ادامه بدون RapidAPI.")
+                            
+                            new_movies_temp.append(movie_cache_entry)
                             if len(new_movies_temp) >= 100:
                                 break
                         page += 1
@@ -698,45 +741,31 @@ async def get_random_movie(max_retries=5):
             movie_to_process = random.choice(available_movies)
             logger.info(f"فیلم انتخاب شد: {movie_to_process['title']} (IMDb ID: {movie_to_process['id']}) (تلاش {attempt + 1})")
             
-            # دریافت اطلاعات اولیه فیلم (که شامل IMDb ID است)
+            # دریافت اطلاعات کامل فیلم (شامل خلاصه داستان و... که در مرحله کش کامل نشده)
+            # و همچنین بروزرسانی امتیازات اگر از RapidAPI در کش موجود نبود
             movie_info = await get_movie_info(movie_to_process['title'], movie_to_process.get('tmdb_id'))
             
             if not movie_info:
                 logger.warning(f"اطلاعات اولیه فیلم {movie_to_process['title']} نامعتبر، تلاش مجدد برای انتخاب فیلم دیگر...")
                 continue
             
-            # --- دریافت نمرات دقیق با اولویت RapidAPI (فقط هنگام پست کردن) ---
+            # --- اولویت با نمرات RapidAPI ذخیره شده در کش ---
             imdb_score_val = 0.0
             min_score = 8.0 if 'انیمیشن' in movie_info['genres'] else 6.0
 
-            if movie_info.get('imdb_id'):
-                rapidapi_ratings = await get_ratings_from_rapidapi(movie_info['imdb_id'])
-                if rapidapi_ratings and rapidapi_ratings.get("imdb_rating"):
-                    movie_info['imdb'] = {
-                        "imdb": rapidapi_ratings["imdb_rating"],
-                        "imdb_votes": rapidapi_ratings.get("imdb_votes"),
-                        "rotten_tomatoes": rapidapi_ratings.get("rotten_tomatoes"),
-                        "metacritic": rapidapi_ratings.get("metacritic"),
-                    }
-                    imdb_score_val = float(movie_info['imdb']['imdb'].split('/')[0])
-                    logger.info(f"نمرات از RapidAPI برای {movie_info['title']} دریافت شد: {movie_info['imdb']['imdb']}")
-                else:
-                    logger.warning(f"RapidAPI نتوانست نمرات کامل را برای {movie_info['title']} ارائه دهد یا محدودیت داشت. فال‌بک به TMDB.")
-                    # Fallback to TMDB's vote_average if RapidAPI failed
-                    if movie_info['imdb'].get('imdb'): # اگر قبلاً از TMDB گرفته شده
-                        imdb_score_val = float(movie_info['imdb']['imdb'].split('/')[0])
-            
-            # اگر RapidAPI موفق نبود، از نمرات TMDB (که در get_movie_info اولیه گرفته شد) استفاده می‌کنیم
-            if imdb_score_val == 0.0 and movie_info['imdb'].get('imdb'):
+            # استفاده از اطلاعات امتیاز از movie_to_process که از کش آمده
+            # این شامل نمرات RapidAPI است اگر در مرحله کش گرفته شده باشد
+            movie_info['imdb'] = movie_to_process['imdb']
+            if movie_info['imdb'].get('imdb'):
                 imdb_score_val = float(movie_info['imdb']['imdb'].split('/')[0])
-                logger.info(f"استفاده از امتیاز TMDB برای {movie_info['title']} (فال‌بک): {imdb_score_val}")
-
+            logger.info(f"نمرات از کش (RapidAPI/TMDB) برای {movie_info['title']} استفاده شد: {movie_info['imdb'].get('imdb', 'N/A')}")
+            
             if imdb_score_val < min_score:
-                logger.warning(f"فیلم {movie_info['title']} امتیاز {imdb_score_val} دارد، رد شد (حداقل {min_score} لازم است)")
+                logger.warning(f"فیلم {movie_to_process['title']} امتیاز {imdb_score_val} دارد، رد شد (حداقل {min_score} لازم است)")
                 continue
             
             # اضافه کردن فیلم به لیست پست شده‌ها با IMDb ID
-            if movie_info['imdb_id']: # اطمینان از وجود IMDb ID قبل از اضافه کردن به posted_movies
+            if movie_info['imdb_id']:
                 posted_movies.append(movie_info['imdb_id'])
                 await save_posted_movies_to_file()
                 logger.info(f"فیلم‌های ارسال‌شده: {posted_movies}")
@@ -786,6 +815,7 @@ def format_movie_post(movie):
     genres = ' '.join([f"#{g.replace(' ', '_')}" for g in movie['genres']]) if movie['genres'] else '#سینمایی'
     
     trailer_part = ""
+    # اصلاح: اطمینان از وجود کلید 'trailer' قبل از دسترسی
     if movie.get('trailer') and movie['trailer'] and movie['trailer'].startswith('http'):
         cleaned_trailer = clean_text(movie['trailer'])
         if cleaned_trailer:
@@ -801,7 +831,7 @@ def format_movie_post(movie):
 """
     ]
     
-    if movie['imdb'].get('imdb_votes') and str(movie['imdb']['imdb_votes']).replace(',', '').isdigit(): # اطمینان از اینکه عدد است
+    if movie['imdb'].get('imdb_votes') and str(movie['imdb']['imdb_votes']).replace(',', '').isdigit():
         post_sections.append(f"🗳 <b>تعداد رای: {movie['imdb']['imdb_votes']}</b>\n")
     if movie['imdb'].get('rotten_tomatoes') and movie['imdb']['rotten_tomatoes'] != 'N/A':
         post_sections.append(f"🍅 <b>Rotten Tomatoes: {movie['imdb']['rotten_tomatoes']}</b>\n")
@@ -1061,8 +1091,7 @@ async def show_movies_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         movies_list = "\n".join([f"{i+1}. {m['title']} (IMDb ID: {m['id']})" for i, m in enumerate(cached_movies)])
         keyboard = [[InlineKeyboardButton("بازگشت", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        # برای لیست‌های خیلی بلند، آن را به چند پیام تقسیم کنید یا به یک فایل ارسال کنید
-        if len(movies_list) > 4000: # محدودیت کاراکتر تلگرام
+        if len(movies_list) > 4000:
             await query.message.edit_text("📋 لیست فیلم‌ها (بخش اول):")
             await context.bot.send_message(chat_id=query.message.chat_id, text=movies_list[:4000])
             if len(movies_list) > 4000:
@@ -1203,7 +1232,6 @@ async def run_bot():
 
 async def main():
     logger.info("شروع برنامه...")
-    # await init_openai_client() # حذف شد
     await load_cache_from_file()
     await load_posted_movies_from_file()
     
@@ -1243,8 +1271,6 @@ async def main():
             await bot_app.stop()
         await bot_app.shutdown()
         await web_runner.cleanup()
-        # if client: # حذف شد
-        #     await client.close()
 
 if __name__ == '__main__':
     asyncio.run(main())
