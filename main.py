@@ -927,7 +927,11 @@ def format_movie_post(movie):
     rlm = '\u200F'
     genres = ' '.join([f"#{g.replace(' ', '_')}" for g in movie['genres']]) if movie['genres'] else '#سینمایی'
     
-    trailer_part = f" | <a href='{clean_text(movie['trailer'])}'>تریلر فیلم</a>" if movie['trailer'] and movie['trailer'].startswith('http') else ""
+    trailer_part = ""
+    if movie.get('trailer') and movie['trailer'] and movie['trailer'].startswith('http'):
+        cleaned_trailer = clean_text(movie['trailer'])
+        if cleaned_trailer:
+            trailer_part = f" | <a href='{cleaned_trailer}'>تریلر فیلم</a>"
     
     post_sections = [
         f"""
